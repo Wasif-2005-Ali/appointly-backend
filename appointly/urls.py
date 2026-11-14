@@ -24,4 +24,8 @@ urlpatterns = [
 
     # Call REST API
     path("api/call/", include("call.urls", namespace="call")),
+
+    # Appointment and provider availability APIs
+    path("api/v1/appointments/", include("appointments.urls")),
+    path("api/v1/availability/", include("availability.urls")),
 ]
