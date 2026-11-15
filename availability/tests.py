@@ -12,7 +12,7 @@ from .models import WeeklyAvailability, WeeklyAvailabilityRule
 
 class AvailabilityApiTests(TestCase):
     def setUp(self):
-        self.provider = get_user_model().objects.create_user(username="provider")
+        self.provider = get_user_model().objects.create_user(email="provider@test.com", full_name="Provider", profession="Tester", password="TestPass123!")
         self.client = APIClient()
         self.authenticate_as(self.provider)
 
