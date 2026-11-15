@@ -181,3 +181,4 @@ CHANNEL_LAYERS = {
         "BACKEND": "channels.layers.InMemoryChannelLayer"
     }
 }
+PASSWORD_RESET_URL = env('PASSWORD_RESET_URL', default='http://localhost:3000/reset-password')
