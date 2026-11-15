@@ -166,8 +166,8 @@ class RegistrationLoginAPITests(TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn('access', response.data['tokens'])
-        self.assertIn('refresh', response.data['tokens'])
+        self.assertIn('access', response.data)
+        self.assertIn('refresh', response.data)
 
     def test_login_is_case_insensitive_for_email(self):
         response = self.client.post(
@@ -300,7 +300,7 @@ class MeAPITests(TestCase):
         response = self.client.get(self.me_url)
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn('user', response.data)
+        self.assertIn('id', response.data)
 
     def test_profile_contains_correct_user_details(self):
         self.client.credentials(
@@ -310,17 +310,17 @@ class MeAPITests(TestCase):
         response = self.client.get(self.me_url)
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data['user']['id'], self.user.id)
+        self.assertEqual(response.data['id'], self.user.id)
         self.assertEqual(
-            response.data['user']['full_name'],
+            response.data['full_name'],
             'Me Test User',
         )
         self.assertEqual(
-            response.data['user']['email'],
+            response.data['email'],
             'me@example.com',
         )
         self.assertEqual(
-            response.data['user']['profession'],
+            response.data['profession'],
             'Student',
         )
 

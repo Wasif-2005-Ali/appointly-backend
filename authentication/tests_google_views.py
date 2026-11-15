@@ -202,10 +202,10 @@ class GoogleAuthExistingUserTest(GoogleAuthViewTestBase):
 
         self.mock_jwt.assert_called_once_with(user)
         self.assertEqual(
-            response.data['tokens']['access'], 'test-access-token',
+            response.data['access'], 'test-access-token',
         )
         self.assertEqual(
-            response.data['tokens']['refresh'], 'test-refresh-token',
+            response.data['refresh'], 'test-refresh-token',
         )
 
 
@@ -375,9 +375,9 @@ class GoogleAuthTokenResponseTest(GoogleAuthViewTestBase):
 
         response = self.post_google()
 
-        self.assertIn('tokens', response.data)
-        self.assertIn('access', response.data['tokens'])
-        self.assertIn('refresh', response.data['tokens'])
+        self.assertIn('access', response.data)
+        self.assertIn('access', response.data)
+        self.assertIn('refresh', response.data)
 
     def test_response_contains_user_and_message(self):
         user = self.make_user()
@@ -406,6 +406,6 @@ class GoogleAuthTokenResponseTest(GoogleAuthViewTestBase):
         response = self.post_google()
 
         self.assertEqual(response.status_code, 200)
-        self.assertIsInstance(response.data['tokens'], dict)
+        self.assertIsInstance(response.data, dict)
         self.assertIsInstance(response.data['user'], dict)
         self.assertIsInstance(response.data['message'], str)

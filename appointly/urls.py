@@ -19,6 +19,9 @@ urlpatterns = [
     path("api/auth/token/refresh/", TokenRefreshView.as_view(),     name="token-refresh"),
     path("api/auth/token/verify/",  TokenVerifyView.as_view(),      name="token-verify"),
 
+    # Authentication API
+    path("api/v1/auth/", include("authentication.urls")),
+
     # Chat REST API
     path("api/chat/", include("chat.urls", namespace="chat")),
 

@@ -83,7 +83,7 @@ class LoginView(APIView):
             {
                 'message': 'Login successful.',
                 'user': _user_response(user),
-                'tokens': _jwt_tokens(user),
+                **_jwt_tokens(user),
             },
             status=status.HTTP_200_OK,
         )
@@ -140,7 +140,7 @@ class GoogleAuthView(APIView):
                         {
                             'message': 'Google Sign-In successful.',
                             'user': _user_response(user),
-                            'tokens': _jwt_tokens(user),
+                            **_jwt_tokens(user),
                         },
                         status=status.HTTP_200_OK,
                     )
@@ -211,7 +211,7 @@ class GoogleAuthView(APIView):
             {
                 'message': 'Google Sign-In successful.',
                 'user': _user_response(user),
-                'tokens': _jwt_tokens(user),
+                **_jwt_tokens(user),
             },
             status=status.HTTP_200_OK,
         )
@@ -269,6 +269,6 @@ class MeView(APIView):
 
     def get(self, request):
         return Response(
-            {'user': _user_response(request.user)},
+            _user_response(request.user),
             status=status.HTTP_200_OK,
         )

@@ -27,6 +27,7 @@ environ.Env.read_env(BASE_DIR / '.env')
 SECRET_KEY = env('SECRET_KEY')
 DEBUG = env('DEBUG')
 ALLOWED_HOSTS = env('ALLOWED_HOSTS')
+GOOGLE_CLIENT_ID = env('GOOGLE_CLIENT_ID', default='')
 
 
 # ---------------------------------------------------------------------------
@@ -44,6 +45,7 @@ INSTALLED_APPS = [
     # Third-party
     'rest_framework',
     'rest_framework_simplejwt',
+    'rest_framework_simplejwt.token_blacklist',
     'channels',
 
     # Local apps
@@ -51,7 +53,10 @@ INSTALLED_APPS = [
     'call',
     'appointments',
     'availability',
+    'authentication',
 ]
+
+AUTH_USER_MODEL = 'authentication.User'
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',

@@ -13,8 +13,8 @@ from .models import Appointment
 class AppointmentApiTests(TestCase):
     def setUp(self):
         user_model = get_user_model()
-        self.requester = user_model.objects.create_user(username="requester")
-        self.provider = user_model.objects.create_user(username="provider")
+        self.requester = user_model.objects.create_user(email="requester@test.com", full_name="Requester", profession="Tester", password="TestPass123!")
+        self.provider = user_model.objects.create_user(email="provider@test.com", full_name="Provider", profession="Tester", password="TestPass123!")
         self.client = APIClient()
         self.authenticate_as(self.requester)
 
