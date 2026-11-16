@@ -205,4 +205,6 @@ CHANNEL_LAYERS = {
         "BACKEND": "channels.layers.InMemoryChannelLayer"
     }
 }
-PASSWORD_RESET_URL = env('PASSWORD_RESET_URL', default='http://localhost:3000/reset-password')
+# Base URL used for links emailed to users (e.g. the password-reset page).
+# Defaults to the deployed backend; override with SITE_URL on other hosts.
+SITE_URL = env('SITE_URL', default='https://appointly-backend-dogk.onrender.com')
