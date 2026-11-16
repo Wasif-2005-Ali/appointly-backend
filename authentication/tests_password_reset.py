@@ -1,4 +1,4 @@
-from urllib.parse import urlsplit, parse_qs
+from urllib.parse import urlsplit
 
 from django.core import mail
 from django.test import override_settings
@@ -37,11 +37,12 @@ class PasswordResetTests(APITestCase):
 
         link = mail.outbox[0].body.splitlines()
         reset_url = next(
-            line for line in link if "uid=" in line and "token=" in line
+            line for line in link if "/reset-password/" in line
         )
-        query = parse_qs(urlsplit(reset_url).query)
-
-        return query["uid"][0], query["token"][0]
+        # The email links to the hosted page:
+        # <SITE_URL>/reset-password/<uidb64>/<token>/
+        parts = urlsplit(reset_url).path.rstrip("/").split("/")
+        return parts[-2], parts[-1]
 
     def test_password_reset_email_is_sent(self):
         response = self.client.post(

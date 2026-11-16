@@ -8,6 +8,7 @@ GET         /api/chat/rooms/<room_id>/                   RoomDetailView
 POST        /api/chat/rooms/<room_id>/participants/add/  AddParticipantView
 POST        /api/chat/rooms/<room_id>/participants/remove/ RemoveParticipantView
 GET         /api/chat/rooms/<room_id>/messages/          MessageListView
+POST        /api/chat/rooms/<room_id>/read/              MarkReadView
 
 All endpoints require a valid Bearer (SimpleJWT) access token.
 """
@@ -282,3 +283,33 @@ class MessageListView(APIView):
             "next_before": next_before,
             "messages": MessageSerializer(messages, many=True).data,
         })
+
+
+class MarkReadView(APIView):
+    """
+    POST /api/chat/rooms/<room_id>/read/
+
+    Marks every message in the room sent by someone else as read by
+    the requesting user (adds them to each message's ``read_by``).
+    The app calls this when a thread is opened, so unread badges
+    clear server-side and stay cleared across devices and restarts.
+
+    Response: {"room_id": "...", "marked_read": <int>}
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request: Request, room_id: str) -> Response:
+        room = _get_room_or_404(room_id)
+        if isinstance(room, Response):
+            return room
+
+        denied = _assert_member(room, str(request.user.pk))
+        if denied:
+            return denied
+
+        marked = Message.mark_room_read(room_id, str(request.user.pk))
+        return Response(
+            {"room_id": room_id, "marked_read": marked},
+            status=status.HTTP_200_OK,
+        )

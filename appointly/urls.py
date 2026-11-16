@@ -10,9 +10,18 @@ from rest_framework_simplejwt.views import (
     TokenVerifyView,
 )
 
+from authentication.password_reset_views import PasswordResetPageView
+
 urlpatterns = [
     # Django admin
     path("admin/", admin.site.urls),
+
+    # Hosted password-reset page (linked from the reset email)
+    path(
+        "reset-password/<uidb64>/<token>/",
+        PasswordResetPageView.as_view(),
+        name="password_reset_page",
+    ),
 
     # JWT auth
     path("api/auth/token/",         TokenObtainPairView.as_view(),  name="token-obtain"),

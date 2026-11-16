@@ -41,4 +41,9 @@ urlpatterns = [
         views.MessageListView.as_view(),
         name="message-list",
     ),
+    path(
+        "rooms/<str:room_id>/read/",
+        views.MarkReadView.as_view(),
+        name="message-mark-read",
+    ),
 ]

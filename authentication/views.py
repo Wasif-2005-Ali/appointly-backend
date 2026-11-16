@@ -8,6 +8,7 @@ Provides endpoints for:
 """
 
 from django.db import IntegrityError, transaction
+from django.db.models import Q
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -19,7 +20,7 @@ from .google_auth import GoogleAuthError, verify_google_id_token
 from .google_serializers import GoogleAuthSerializer
 from .login_serializers import LoginSerializer
 from .models import User
-from .serializers import RegisterSerializer
+from .serializers import ProfileUpdateSerializer, RegisterSerializer
 
 
 # ------------------------------------------------------------------
@@ -263,12 +264,57 @@ class LogoutView(APIView):
 
 
 class MeView(APIView):
-    """GET /api/v1/auth/me/ — retrieve the authenticated user's profile."""
+    """GET /api/v1/auth/me/ — retrieve the authenticated user's profile.
+    PATCH /api/v1/auth/me/ — update full_name and/or profession."""
 
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         return Response(
             _user_response(request.user),
+            status=status.HTTP_200_OK,
+        )
+
+    def patch(self, request):
+        serializer = ProfileUpdateSerializer(
+            request.user,
+            data=request.data,
+            partial=True,
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(
+            _user_response(request.user),
+            status=status.HTTP_200_OK,
+        )
+
+
+class UserSearchView(APIView):
+    """GET /api/v1/auth/users/?search=<query> — search users by name/email.
+
+    Returns a JSON array (max 20) of {id, full_name, email, profession},
+    excluding the requesting user. Matches full_name or email
+    case-insensitively. An empty or missing search param returns []."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        query = request.query_params.get('search', '').strip()
+
+        if not query:
+            return Response([], status=status.HTTP_200_OK)
+
+        users = (
+            User.objects
+            .exclude(pk=request.user.pk)
+            .filter(
+                Q(full_name__icontains=query)
+                | Q(email__icontains=query)
+            )
+            .order_by('full_name')[:20]
+        )
+
+        return Response(
+            [_user_response(user) for user in users],
             status=status.HTTP_200_OK,
         )
