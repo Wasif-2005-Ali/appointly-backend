@@ -1,0 +1,32 @@
+# Render Blueprint — deploys the Appointly backend (Django + Channels).
+# The service runs Daphne (ASGI) so HTTP and WebSocket traffic both work.
+# Deploy from the feature/render-deploy branch until this is verified,
+# then merge to main and point the service at main.
+services:
+  - type: web
+    name: appointly-backend
+    runtime: python
+    plan: free
+    region: singapore
+    branch: feature/render-deploy
+    buildCommand: pip install -r requirements.txt && python manage.py collectstatic --no-input && python manage.py migrate
+    startCommand: daphne -b 0.0.0.0 -p $PORT appointly.asgi:application
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.0
+      - key: DEBUG
+        value: false
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ALLOWED_HOSTS
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: MONGODB_URI
+        sync: false
+      - key: MONGODB_NAME
+        value: appointly
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: CSRF_TRUSTED_ORIGINS
+        sync: false

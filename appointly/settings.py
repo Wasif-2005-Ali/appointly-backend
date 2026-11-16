@@ -29,6 +29,16 @@ DEBUG = env('DEBUG')
 ALLOWED_HOSTS = env('ALLOWED_HOSTS')
 GOOGLE_CLIENT_ID = env('GOOGLE_CLIENT_ID', default='')
 
+_csrf_origins = env('CSRF_TRUSTED_ORIGINS', default='')
+CSRF_TRUSTED_ORIGINS = [o.strip() for o in _csrf_origins.split(',') if o.strip()]
+
+if not DEBUG:
+    # Render terminates TLS at its proxy; trust its forwarded-proto header
+    # so Django builds https:// URLs and secure cookies work.
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+
 
 # ---------------------------------------------------------------------------
 # Application definition
@@ -60,6 +70,7 @@ AUTH_USER_MODEL = 'authentication.User'
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -90,18 +101,30 @@ ASGI_APPLICATION = 'appointly.asgi.application'
 
 
 # ---------------------------------------------------------------------------
-# Database — PostgreSQL (credentials from .env)
+# Database — PostgreSQL
+# Set DATABASE_URL (e.g. the Neon connection string) on the server.
+# Locally, keep using the POSTGRES_* variables from .env instead.
 # ---------------------------------------------------------------------------
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME':     env('POSTGRES_DB'),
-        'USER':     env('POSTGRES_USER'),
-        'PASSWORD': env('POSTGRES_PASSWORD'),
-        'HOST':     env('POSTGRES_HOST', default='127.0.0.1'),
-        'PORT':     env('POSTGRES_PORT', default='5432'),
+if env('DATABASE_URL', default=''):
+    DATABASES = {'default': env.db('DATABASE_URL')}
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME':     env('POSTGRES_DB'),
+            'USER':     env('POSTGRES_USER'),
+            'PASSWORD': env('POSTGRES_PASSWORD'),
+            'HOST':     env('POSTGRES_HOST', default='127.0.0.1'),
+            'PORT':     env('POSTGRES_PORT', default='5432'),
+        }
     }
-}
+
+
+# ---------------------------------------------------------------------------
+# MongoDB — chat rooms and call signalling (chat/db.py, call/db.py)
+# ---------------------------------------------------------------------------
+MONGODB_URI = env('MONGODB_URI', default='mongodb://127.0.0.1:27017')
+MONGODB_NAME = env('MONGODB_NAME', default='appointly')
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +159,7 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # ---------------------------------------------------------------------------
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 
 # ---------------------------------------------------------------------------
