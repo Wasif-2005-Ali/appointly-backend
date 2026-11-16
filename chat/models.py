@@ -288,3 +288,18 @@ class Message:
         )
         if user_id not in self.read_by:
             self.read_by.append(user_id)
+
+    @classmethod
+    def mark_room_read(cls, room_id: str, user_id: str) -> int:
+        """Mark every message in *room_id* sent by someone else as read
+        by *user_id* (adds them to each message's ``read_by``).
+        Returns the number of messages newly marked."""
+        result = get_messages_collection().update_many(
+            {
+                "room_id": room_id,
+                "sender_id": {"$ne": user_id},
+                "read_by": {"$ne": user_id},
+            },
+            {"$addToSet": {"read_by": user_id}},
+        )
+        return result.modified_count
