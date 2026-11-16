@@ -93,3 +93,21 @@ class RegisterSerializer(serializers.ModelSerializer):
             password=validated_data['password'],
         )
         return user
+
+
+class ProfileUpdateSerializer(serializers.ModelSerializer):
+    """
+    Serializer for partial profile updates (PATCH /me/).
+
+    Only full_name and profession may be changed. Email and password
+    are not fields here, so they can never be changed through this
+    endpoint (any such keys in the request body are ignored).
+    """
+
+    class Meta:
+        model = User
+        fields = ['full_name', 'profession']
+        extra_kwargs = {
+            'full_name': {'required': False},
+            'profession': {'required': False},
+        }
