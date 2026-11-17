@@ -166,9 +166,11 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 # Email
 # SMTP (Gmail defaults) works only where outbound SMTP is reachable; on
 # Render free it is not (Nov 2026: Errno 101 Network is unreachable), so
-# production uses the SendGrid HTTPS backend instead:
-#   EMAIL_BACKEND=authentication.sendgrid_backend.SendGridBackend
-#   SENDGRID_API_KEY=<SendGrid API key with Mail Send access>
+# production uses an HTTPS email API backend instead:
+#   EMAIL_BACKEND=authentication.mailjet_backend.MailjetBackend
+#   MAILJET_API_KEY=<Mailjet API key> MAILJET_API_SECRET=<Mailjet secret>
+# (A SendGrid backend also exists — authentication.sendgrid_backend —
+# but SendGrid locked the new account on signup, Nov 2026.)
 # EMAIL_HOST_USER / EMAIL_HOST_PASSWORD are the SMTP fallback (for Gmail,
 # use an app password, not the account password).
 # ---------------------------------------------------------------------------
@@ -179,6 +181,8 @@ EMAIL_USE_TLS = env.bool('EMAIL_USE_TLS', default=True)
 EMAIL_HOST_USER = env('EMAIL_HOST_USER', default='')
 EMAIL_HOST_PASSWORD = env('EMAIL_HOST_PASSWORD', default='')
 SENDGRID_API_KEY = env('SENDGRID_API_KEY', default='')
+MAILJET_API_KEY = env('MAILJET_API_KEY', default='')
+MAILJET_API_SECRET = env('MAILJET_API_SECRET', default='')
 DEFAULT_FROM_EMAIL = EMAIL_HOST_USER or 'Appointly <noreply@example.com>'
 
 
