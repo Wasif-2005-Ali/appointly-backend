@@ -163,9 +163,14 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 
 # ---------------------------------------------------------------------------
-# Email (SMTP — Gmail defaults; configure via env on the server)
-# EMAIL_HOST_USER / EMAIL_HOST_PASSWORD must be set for real delivery
-# (for Gmail, use an app password, not the account password).
+# Email
+# SMTP (Gmail defaults) works only where outbound SMTP is reachable; on
+# Render free it is not (Nov 2026: Errno 101 Network is unreachable), so
+# production uses the SendGrid HTTPS backend instead:
+#   EMAIL_BACKEND=authentication.sendgrid_backend.SendGridBackend
+#   SENDGRID_API_KEY=<SendGrid API key with Mail Send access>
+# EMAIL_HOST_USER / EMAIL_HOST_PASSWORD are the SMTP fallback (for Gmail,
+# use an app password, not the account password).
 # ---------------------------------------------------------------------------
 EMAIL_BACKEND = env('EMAIL_BACKEND', default='django.core.mail.backends.smtp.EmailBackend')
 EMAIL_HOST = env('EMAIL_HOST', default='smtp.gmail.com')
@@ -173,6 +178,7 @@ EMAIL_PORT = env.int('EMAIL_PORT', default=587)
 EMAIL_USE_TLS = env.bool('EMAIL_USE_TLS', default=True)
 EMAIL_HOST_USER = env('EMAIL_HOST_USER', default='')
 EMAIL_HOST_PASSWORD = env('EMAIL_HOST_PASSWORD', default='')
+SENDGRID_API_KEY = env('SENDGRID_API_KEY', default='')
 DEFAULT_FROM_EMAIL = EMAIL_HOST_USER or 'Appointly <noreply@example.com>'
 
 
