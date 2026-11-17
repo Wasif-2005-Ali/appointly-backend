@@ -127,6 +127,16 @@ def transition_appointment(appointment_id, user_id, action):
         if appointment.status not in ACTIVE_STATUSES:
             raise Conflict("Only pending or accepted appointments can be cancelled.")
         appointment.status = Appointment.Status.CANCELLED
+    elif action == "complete":
+        # Only the provider marks an appointment complete: the provider
+        # delivers the service, so only they can confirm it happened.
+        if user_id != appointment.provider_id:
+            raise exceptions.PermissionDenied(
+                "Only the provider can mark an appointment as completed."
+            )
+        if appointment.status != Appointment.Status.ACCEPTED:
+            raise Conflict("Only accepted appointments can be marked as completed.")
+        appointment.status = Appointment.Status.COMPLETED
     else:
         raise ValueError(f"Unsupported appointment action: {action}")
 
