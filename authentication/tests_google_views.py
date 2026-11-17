@@ -228,33 +228,39 @@ class GoogleAuthMissingProfessionTest(GoogleAuthViewTestBase):
 
 
 # ==================================================================
-# 4. Existing email conflict — no automatic linking
+# 4. Existing email — automatic linking on verified Google email
 # ==================================================================
 
 class GoogleAuthEmailConflictTest(GoogleAuthViewTestBase):
-    """Google email matches an existing account — must NOT auto-link."""
+    """Google email matches an existing account — auto-link and log in."""
 
-    def test_existing_email_returns_409(self):
+    def test_existing_email_auto_links_and_logs_in(self):
         existing = self.make_user(google_id=None)
         self.set_query_results(None, existing)
 
         response = self.post_google()
 
-        self.assertEqual(response.status_code, 409)
-        self.assertIn('already exists', response.data['detail'])
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.data['message'], 'Google Sign-In successful.',
+        )
+        self.assertEqual(response.data['user']['email'], existing.email)
         self.mock_create.assert_not_called()
-        self.mock_jwt.assert_not_called()
+        self.mock_jwt.assert_called_once_with(existing)
 
-    def test_email_conflict_does_not_link_google_id(self):
-        """The existing user's google_id must NOT be overwritten."""
+    def test_existing_email_gets_google_id_linked(self):
+        """The existing user's google_id is set to the Google subject."""
         existing = self.make_user(google_id=None)
         self.set_query_results(None, existing)
 
         self.post_google()
 
-        existing.save.assert_not_called()
+        self.assertEqual(existing.google_id, 'google-sub-123')
+        existing.save.assert_called_once_with(
+            update_fields=['google_id'],
+        )
 
-    def test_email_conflict_with_different_google_id_returns_409(self):
+    def test_email_linked_to_different_google_id_returns_409(self):
         """Email match where user already has a different Google ID."""
         existing = self.make_user(google_id='other-google-id')
         self.set_query_results(None, existing)
@@ -262,7 +268,7 @@ class GoogleAuthEmailConflictTest(GoogleAuthViewTestBase):
         response = self.post_google()
 
         self.assertEqual(response.status_code, 409)
-        self.assertIn('already exists', response.data['detail'])
+        self.assertIn('different Google account', response.data['detail'])
         self.mock_jwt.assert_not_called()
 
 

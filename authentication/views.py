@@ -156,17 +156,36 @@ class GoogleAuthView(APIView):
                 )
 
                 if email_user is not None:
-                    # Do NOT auto-link.  Account linking will be
-                    # implemented in a future stage.
+                    # Auto-link: the Google ID token is verified and
+                    # Google confirms the email belongs to the signer,
+                    # so link the Google ID to the existing account
+                    # and sign them in.
+                    if email_user.google_id not in (None, google_id):
+                        # Already linked to a different Google account.
+                        return Response(
+                            {
+                                'detail': (
+                                    'This email is already linked to a '
+                                    'different Google account. Please log '
+                                    'in with your email and password.'
+                                ),
+                            },
+                            status=status.HTTP_409_CONFLICT,
+                        )
+                    if not email_user.is_active:
+                        return Response(
+                            {'detail': 'This account is inactive.'},
+                            status=status.HTTP_403_FORBIDDEN,
+                        )
+                    email_user.google_id = google_id
+                    email_user.save(update_fields=['google_id'])
                     return Response(
                         {
-                            'detail': (
-                                'An account with this email already exists. '
-                                'Please log in with your email and password, '
-                                'then link your Google account.'
-                            ),
+                            'message': 'Google Sign-In successful.',
+                            'user': _user_response(email_user),
+                            **_jwt_tokens(email_user),
                         },
-                        status=status.HTTP_409_CONFLICT,
+                        status=status.HTTP_200_OK,
                     )
 
                 # 3. New Google user — profession is required.
