@@ -17,6 +17,7 @@ Flow tested
 10. Callee sends 'call.sdp_answer' -> Caller receives 'call.sdp_answer'.
 11. Peer-to-peer ICE candidate exchange verified in both directions.
 12. Caller sends 'call.end' -> Both receive 'call.ended' with duration.
+    (Run twice: once ended by the caller, once by the callee.)
 13. Verify call history via REST: GET /api/call/history/
 
 Usage
@@ -98,26 +99,44 @@ def ensure_users() -> tuple[str, str]:
         return "", ""
 
     User = get_user_model()
-    # Ensure caller exists or warn
-    caller = User.objects.filter(username=args.caller_user).first()
-    if not caller:
-        # If default caller doesn't exist, create it
-        caller = User.objects.create_user(username=args.caller_user, password=args.caller_pass)
-        print(f"{INFO} Created caller user '{args.caller_user}'")
+    # The custom User model has no username field — email is the login
+    # identifier. Treat the --caller-user/--callee-user args as emails
+    # when they contain '@', otherwise derive a test email from them.
+    caller_email = _email_for(args.caller_user)
+    callee_email = _email_for(args.callee_user)
 
-    # Ensure callee exists
-    callee = User.objects.filter(username=args.callee_user).first()
+    caller = User.objects.filter(email__iexact=caller_email).first()
+    if not caller:
+        caller = User.objects.create_user(
+            email=caller_email,
+            full_name=args.caller_user,
+            profession="Tester",
+            password=args.caller_pass,
+        )
+        print(f"{INFO} Created caller user '{caller_email}'")
+
+    callee = User.objects.filter(email__iexact=callee_email).first()
     if not callee:
-        callee = User.objects.create_user(username=args.callee_user, password=args.callee_pass)
-        print(f"{INFO} Created callee user '{args.callee_user}'")
+        callee = User.objects.create_user(
+            email=callee_email,
+            full_name=args.callee_user,
+            profession="Tester",
+            password=args.callee_pass,
+        )
+        print(f"{INFO} Created callee user '{callee_email}'")
 
     return str(caller.pk), str(callee.pk)
 
 
+def _email_for(user_arg: str) -> str:
+    """Return the login email for a --caller-user/--callee-user arg."""
+    return user_arg if "@" in user_arg else f"{user_arg}@test.local"
+
+
 def get_jwt(client: httpx.Client, username: str, password: str) -> tuple[str, str]:
     resp = client.post(
-        f"{BASE_HTTP}/api/auth/token/",
-        json={"username": username, "password": password},
+        f"{BASE_HTTP}/api/v1/auth/login/",
+        json={"email": _email_for(username), "password": password},
     )
     check(f"Obtain JWT for {username}", resp.status_code == 200, f"status: {resp.status_code}")
     data = resp.json()
@@ -137,7 +156,9 @@ async def run_signaling_flow(
     caller_id: str,
     token_callee: str,
     callee_id: str,
+    ender: str = "caller",
 ) -> None:
+    """Run one full call flow; *ender* chooses who sends ``call.end``."""
     call_id = uuid.uuid4().hex  # 32-char hex string
     ws_notify_url = f"{BASE_WS}/ws/notify/?token={token_callee}"
     ws_caller_url = f"{BASE_WS}/ws/call/{call_id}/?token={token_caller}"
@@ -234,14 +255,23 @@ async def run_signaling_flow(
                 caller_cand = json.loads(await asyncio.wait_for(ws_caller.recv(), timeout=5.0))
                 check("Caller received ICE candidate", caller_cand.get("type") == "call.ice_candidate")
 
-                print(f"\n{INFO} Step 10 — Terminate Call (call.end)")
-                await ws_caller.send(json.dumps({"type": "call.end"}))
+                print(f"\n{INFO} Step 10 — Terminate Call (call.end by {ender})")
+                ender_ws = ws_caller if ender == "caller" else ws_callee
+                await ender_ws.send(json.dumps({"type": "call.end"}))
 
                 caller_ended = json.loads(await asyncio.wait_for(ws_caller.recv(), timeout=5.0))
                 callee_ended = json.loads(await asyncio.wait_for(ws_callee.recv(), timeout=5.0))
                 check("Caller got 'call.ended'", caller_ended.get("type") == "call.ended")
                 check("Callee got 'call.ended'", callee_ended.get("type") == "call.ended")
                 check("Final status is 'ended'", caller_ended.get("session", {}).get("status") == "ended")
+                # Duration must be recorded: the call was connected, so
+                # ending it (from either side) must yield a duration.
+                duration = caller_ended.get("session", {}).get("duration_seconds")
+                check(
+                    f"Duration recorded when {ender} ends the call",
+                    duration is not None and duration >= 0,
+                    f"duration_seconds={duration}",
+                )
 
 
 def check_rest_history(client: httpx.Client, token: str) -> None:
@@ -254,6 +284,12 @@ def check_rest_history(client: httpx.Client, token: str) -> None:
     history = resp.json()
     check("History is non-empty list", isinstance(history, list) and len(history) > 0)
     check("Latest call status is 'ended'", history[0].get("status") == "ended")
+    duration = history[0].get("duration_seconds")
+    check(
+        "History records a duration for the connected call",
+        duration is not None and duration >= 0,
+        f"duration_seconds={duration}",
+    )
     print(f"     Call ID: {history[0].get('call_id')}, Duration: {history[0].get('duration_seconds')}s")
 
 
@@ -270,7 +306,12 @@ async def main() -> None:
         token_caller, caller_id = get_jwt(client, args.caller_user, args.caller_pass)
         token_callee, callee_id = get_jwt(client, args.callee_user, args.callee_pass)
 
-        await run_signaling_flow(token_caller, caller_id, token_callee, callee_id)
+        # Run the flow twice: once with the caller ending the call
+        # (the case that used to record duration_seconds=None) and
+        # once with the callee ending it.
+        await run_signaling_flow(token_caller, caller_id, token_callee, callee_id, ender="caller")
+        check_rest_history(client, token_caller)
+        await run_signaling_flow(token_caller, caller_id, token_callee, callee_id, ender="callee")
         check_rest_history(client, token_caller)
 
     _print_summary()

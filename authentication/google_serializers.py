@@ -23,8 +23,9 @@ class GoogleAuthSerializer(serializers.Serializer):
     profession : str (optional)
         An optional profession value for new users. When a Google user
         signs in for the first time and no Appointly account exists yet,
-        the view layer may use this value (or a fallback default) when
-        creating the User record.
+        the view layer requires this value — the request is rejected
+        with HTTP 400 if it is missing for a new Google user. It is
+        ignored for existing users.
 
         Max length mirrors ``User.profession`` (100 characters).
     """
@@ -42,7 +43,8 @@ class GoogleAuthSerializer(serializers.Serializer):
         max_length=100,
         trim_whitespace=True,
         help_text=(
-            'Optional profession for new users. '
-            'If omitted, a default value will be assigned.'
+            'Profession for new Google users. '
+            'Required when signing in with Google for the first time; '
+            'the request is rejected if it is missing.'
         ),
     )

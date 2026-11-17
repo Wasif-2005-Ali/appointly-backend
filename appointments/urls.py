@@ -29,6 +29,12 @@ urlpatterns = [
         name="appointment-cancel",
     ),
     path(
+        "<int:appointment_id>/complete/",
+        AppointmentActionView.as_view(),
+        {"action": "complete"},
+        name="appointment-complete",
+    ),
+    path(
         "<int:appointment_id>/reschedule/",
         AppointmentActionView.as_view(),
         name="appointment-reschedule",

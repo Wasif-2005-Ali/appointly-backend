@@ -1,6 +1,6 @@
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
-from rest_framework import generics, serializers, status
+from rest_framework import exceptions, generics, serializers, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -11,7 +11,12 @@ from .serializers import (
     AppointmentRescheduleSerializer,
     AppointmentSerializer,
 )
-from .services import create_appointment, reschedule_appointment, transition_appointment
+from .services import (
+    Conflict,
+    create_appointment,
+    reschedule_appointment,
+    transition_appointment,
+)
 
 
 class AppointmentListCreateView(generics.GenericAPIView):
@@ -68,6 +73,22 @@ class AppointmentDetailView(APIView):
             pk=appointment_id,
         )
         return Response(AppointmentSerializer(appointment).data)
+
+    def delete(self, request, appointment_id):
+        appointment = get_object_or_404(Appointment, pk=appointment_id)
+        if str(request.user.pk) not in {
+            appointment.requester_id,
+            appointment.provider_id,
+        }:
+            raise exceptions.PermissionDenied(
+                "You are not a participant in this appointment."
+            )
+        if appointment.status == Appointment.Status.COMPLETED:
+            # Completed appointments are history; deleting one would
+            # destroy the record of a service that happened.
+            raise Conflict("Completed appointments cannot be deleted.")
+        appointment.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class AppointmentActionView(APIView):

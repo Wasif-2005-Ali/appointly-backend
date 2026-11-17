@@ -467,7 +467,15 @@ class CallConsumer(AsyncJsonWebsocketConsumer):
 
     async def call_accepted(self, event: dict) -> None:
         if self.session:
-            self.session.status = event["session"].get("status", self.session.status)
+            session_data = event.get("session", {})
+            self.session.status = session_data.get("status", self.session.status)
+            # Sync connected_at too: without it this consumer's stale copy
+            # still has connected_at=None, so ending the call from here
+            # would record no duration. (end() also reloads from the DB
+            # as a backstop.)
+            connected_at = session_data.get("connected_at")
+            if connected_at:
+                self.session.connected_at = datetime.fromisoformat(connected_at)
         await self.send_json(event)
 
     async def call_rejected(self, event: dict) -> None:

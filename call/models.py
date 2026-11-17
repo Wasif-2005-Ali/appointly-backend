@@ -16,7 +16,7 @@ State machine
               ┌──────────────────────┼─────────────────────┐
               │                      │                      │
               ▼                      ▼                      ▼
-         call.accept           call.reject             call.miss
+         call.accept           call.reject         call.end (never connected)
               │                      │               (timeout / no answer)
               ▼                      ▼                      ▼
          ┌───────────┐         ┌──────────┐          ┌────────┐
@@ -226,7 +226,7 @@ class CallSession:
         })
 
     def miss(self) -> None:
-        """Transition: ringing → missed (called by a server-side timeout task)."""
+        """Transition: ringing → missed (no answer before the call ended)."""
         now = datetime.now(tz=timezone.utc)
         self._apply_update({
             "status":   CallStatus.MISSED,
@@ -234,13 +234,37 @@ class CallSession:
         })
 
     def end(self) -> None:
-        """Transition: connected → ended (or ringing → ended if caller hangs up)."""
+        """
+        Transition: connected → ended, or ringing → missed.
+
+        Each WebSocket consumer holds its own copy of the session, so
+        this instance's ``connected_at`` may be stale (e.g. the caller's
+        copy predates the callee's accept). Reload the row from the
+        database first so the duration is computed from the real
+        ``connected_at``.
+
+        A call ended before it ever connected was never answered, so it
+        lands in history as ``missed`` rather than ``ended``. An explicit
+        callee reject still goes through :meth:`reject` and stays
+        ``rejected`` — this method only handles the end path.
+        """
+        fresh = CallSession.get_by_call_id(self.call_id)
+        if fresh is not None:
+            self.connected_at = fresh.connected_at
+            self.status = fresh.status
+            if fresh.status in CallStatus.TERMINAL:
+                # Already ended/rejected/missed by the other side — do
+                # not overwrite the terminal state.
+                return
         now = datetime.now(tz=timezone.utc)
-        duration = None
         if self.connected_at:
             duration = (now - self.connected_at).total_seconds()
+            new_status = CallStatus.ENDED
+        else:
+            duration = None
+            new_status = CallStatus.MISSED
         self._apply_update({
-            "status":           CallStatus.ENDED,
+            "status":           new_status,
             "ended_at":         now,
             "duration_seconds": duration,
         })

@@ -113,3 +113,107 @@ class AppointmentApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         appointment.refresh_from_db()
         self.assertEqual(appointment.status, Appointment.Status.ACCEPTED)
+
+    # -- complete endpoint -------------------------------------------------
+
+    def _accepted_appointment(self):
+        starts_at, ends_at = self.future_interval()
+        return Appointment.objects.create(
+            requester_id=str(self.requester.pk),
+            provider_id=str(self.provider.pk),
+            starts_at=datetime.fromisoformat(starts_at),
+            ends_at=datetime.fromisoformat(ends_at),
+            status=Appointment.Status.ACCEPTED,
+        )
+
+    def test_provider_can_complete_accepted_appointment(self):
+        appointment = self._accepted_appointment()
+        self.authenticate_as(self.provider)
+
+        response = self.client.post(
+            f"/api/v1/appointments/{appointment.pk}/complete/", {}, format="json"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.status, Appointment.Status.COMPLETED)
+
+    def test_complete_requires_accepted_status(self):
+        starts_at, ends_at = self.future_interval()
+        appointment = Appointment.objects.create(
+            requester_id=str(self.requester.pk),
+            provider_id=str(self.provider.pk),
+            starts_at=datetime.fromisoformat(starts_at),
+            ends_at=datetime.fromisoformat(ends_at),
+        )
+        self.authenticate_as(self.provider)
+
+        response = self.client.post(
+            f"/api/v1/appointments/{appointment.pk}/complete/", {}, format="json"
+        )
+
+        self.assertEqual(response.status_code, 409)
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.status, Appointment.Status.PENDING)
+
+    def test_only_provider_can_complete_appointment(self):
+        appointment = self._accepted_appointment()
+
+        response = self.client.post(
+            f"/api/v1/appointments/{appointment.pk}/complete/", {}, format="json"
+        )
+
+        self.assertEqual(response.status_code, 403)
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.status, Appointment.Status.ACCEPTED)
+
+    # -- delete endpoint ---------------------------------------------------
+
+    def test_participant_can_delete_pending_appointment(self):
+        starts_at, ends_at = self.future_interval()
+        appointment = Appointment.objects.create(
+            requester_id=str(self.requester.pk),
+            provider_id=str(self.provider.pk),
+            starts_at=datetime.fromisoformat(starts_at),
+            ends_at=datetime.fromisoformat(ends_at),
+        )
+
+        response = self.client.delete(f"/api/v1/appointments/{appointment.pk}/")
+
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(Appointment.objects.filter(pk=appointment.pk).exists())
+
+    def test_non_participant_cannot_delete_appointment(self):
+        user_model = get_user_model()
+        outsider = user_model.objects.create_user(
+            email="outsider@test.com", full_name="Outsider",
+            profession="Tester", password="TestPass123!",
+        )
+        starts_at, ends_at = self.future_interval()
+        appointment = Appointment.objects.create(
+            requester_id=str(self.requester.pk),
+            provider_id=str(self.provider.pk),
+            starts_at=datetime.fromisoformat(starts_at),
+            ends_at=datetime.fromisoformat(ends_at),
+        )
+        self.authenticate_as(outsider)
+
+        response = self.client.delete(f"/api/v1/appointments/{appointment.pk}/")
+
+        self.assertEqual(response.status_code, 403)
+        self.assertTrue(Appointment.objects.filter(pk=appointment.pk).exists())
+
+    def test_completed_appointment_cannot_be_deleted(self):
+        appointment = self._accepted_appointment()
+        appointment.status = Appointment.Status.COMPLETED
+        appointment.save(update_fields=["status"])
+
+        response = self.client.delete(f"/api/v1/appointments/{appointment.pk}/")
+
+        self.assertEqual(response.status_code, 409)
+        self.assertTrue(Appointment.objects.filter(pk=appointment.pk).exists())
+
+    def test_delete_missing_appointment_returns_404(self):
+        response = self.client.delete("/api/v1/appointments/999999/")
+
+        self.assertEqual(response.status_code, 404)
