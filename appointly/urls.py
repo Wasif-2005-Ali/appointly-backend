@@ -11,8 +11,13 @@ from rest_framework_simplejwt.views import (
 )
 
 from authentication.password_reset_views import PasswordResetPageView
+from appointly import views as public_views
 
 urlpatterns = [
+    # Public pages (no login required)
+    path("", public_views.homepage, name="homepage"),
+    path("privacy/", public_views.privacy_policy, name="privacy_policy"),
+
     # Django admin
     path("admin/", admin.site.urls),
 
