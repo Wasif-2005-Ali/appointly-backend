@@ -1,3 +1,5 @@
+import logging
+
 from django.conf import settings
 from django.contrib.auth.tokens import default_token_generator
 from django.core.mail import send_mail
@@ -19,6 +21,8 @@ from .password_reset_serializers import (
     PasswordResetRequestSerializer,
     PasswordResetConfirmSerializer,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class PasswordResetRequestView(APIView):
@@ -58,13 +62,21 @@ class PasswordResetRequestView(APIView):
                 "If you did not request this, ignore this email."
             )
 
-            send_mail(
-                subject="Appointly Password Reset",
-                message=message,
-                from_email=None,
-                recipient_list=[user.email],
-                fail_silently=False,
-            )
+            try:
+                send_mail(
+                    subject="Appointly Password Reset",
+                    message=message,
+                    from_email=None,
+                    recipient_list=[user.email],
+                    fail_silently=False,
+                )
+            except Exception:
+                # Mail delivery must never 500 the endpoint: the reset
+                # flow already returns the same 200 for unknown emails,
+                # so a failed send is logged and the user can retry.
+                logger.exception(
+                    "Password-reset email failed for %s", user.email
+                )
 
         return Response(
             {
