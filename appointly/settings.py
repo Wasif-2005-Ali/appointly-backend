@@ -163,13 +163,26 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 
 # ---------------------------------------------------------------------------
-# Email
+# Email (SMTP — Gmail defaults; configure via env on the server)
+# EMAIL_HOST_USER / EMAIL_HOST_PASSWORD must be set for real delivery
+# (for Gmail, use an app password, not the account password).
 # ---------------------------------------------------------------------------
-MAILERS = {
-    'default': {
-        'BACKEND': 'django.core.mail.backends.console.EmailBackend',
-    },
-}
+EMAIL_BACKEND = env('EMAIL_BACKEND', default='django.core.mail.backends.smtp.EmailBackend')
+EMAIL_HOST = env('EMAIL_HOST', default='smtp.gmail.com')
+EMAIL_PORT = env.int('EMAIL_PORT', default=587)
+EMAIL_USE_TLS = env.bool('EMAIL_USE_TLS', default=True)
+EMAIL_HOST_USER = env('EMAIL_HOST_USER', default='')
+EMAIL_HOST_PASSWORD = env('EMAIL_HOST_PASSWORD', default='')
+DEFAULT_FROM_EMAIL = EMAIL_HOST_USER or 'Appointly <noreply@example.com>'
+
+
+# ---------------------------------------------------------------------------
+# Cloudinary — chat media uploads (chat/views.py MediaUploadView)
+# Set all three on the server; media uploads return 503 while any is missing.
+# ---------------------------------------------------------------------------
+CLOUDINARY_CLOUD_NAME = env('CLOUDINARY_CLOUD_NAME', default='')
+CLOUDINARY_API_KEY = env('CLOUDINARY_API_KEY', default='')
+CLOUDINARY_API_SECRET = env('CLOUDINARY_API_SECRET', default='')
 
 
 # ---------------------------------------------------------------------------
