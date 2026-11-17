@@ -163,6 +163,10 @@ class Message:
         Plain-text message body.
     message_type : str
         One of ``"text"``, ``"image"``, ``"file"``.
+    file_name : Optional[str]
+        Original filename for ``image``/``file`` messages (None for text).
+    file_size : Optional[int]
+        Upload size in bytes for ``image``/``file`` messages (None for text).
     read_by : list[str]
         User IDs who have read this message.
     created_at : datetime
@@ -176,6 +180,8 @@ class Message:
     sender_username: str
     content: str
     message_type: str = "text"
+    file_name: Optional[str] = None
+    file_size: Optional[int] = None
     read_by: list[str] = field(default_factory=list)
     created_at: datetime = field(default_factory=_now)
     _id: Optional[ObjectId] = field(default=None, repr=False)
@@ -202,6 +208,8 @@ class Message:
             "sender_username": self.sender_username,
             "content": self.content,
             "message_type": self.message_type,
+            "file_name": self.file_name,
+            "file_size": self.file_size,
             "read_by": self.read_by,
             "created_at": self.created_at.isoformat(),
         }
@@ -215,6 +223,8 @@ class Message:
             sender_username=data.get("sender_username", ""),
             content=data["content"],
             message_type=data.get("message_type", "text"),
+            file_name=data.get("file_name"),
+            file_size=data.get("file_size"),
             read_by=data.get("read_by", []),
             created_at=data.get("created_at", _now()),
             _id=data.get("_id"),
@@ -233,6 +243,8 @@ class Message:
         sender_username: str,
         content: str,
         message_type: str = "text",
+        file_name: Optional[str] = None,
+        file_size: Optional[int] = None,
     ) -> "Message":
         """Persist a new message and return the populated instance."""
         msg = cls(
@@ -241,6 +253,8 @@ class Message:
             sender_username=sender_username,
             content=content,
             message_type=message_type,
+            file_name=file_name,
+            file_size=file_size,
             read_by=[sender_id],    # sender has implicitly read their own message
         )
         result = get_messages_collection().insert_one(msg.to_dict())

@@ -46,4 +46,9 @@ urlpatterns = [
         views.MarkReadView.as_view(),
         name="message-mark-read",
     ),
+    path(
+        "rooms/<str:room_id>/media/",
+        views.MediaUploadView.as_view(),
+        name="message-media-upload",
+    ),
 ]

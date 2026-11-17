@@ -216,11 +216,7 @@ class ProfileUpdateTests(TestCase):
 
 
 @override_settings(
-    MAILERS={
-        "default": {
-            "BACKEND": "django.core.mail.backends.locmem.EmailBackend",
-        }
-    }
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
 )
 class PasswordResetPageTests(TestCase):
     def setUp(self):
