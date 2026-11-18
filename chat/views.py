@@ -93,6 +93,27 @@ def _broadcast_message(room_id: str, message: dict) -> None:
     )
 
 
+def _broadcast_read(room_id: str, reader_id: str) -> None:
+    """
+    Push a ``chat.read`` frame to every WebSocket client in the room.
+
+    Same group (``chat_<room_id>``) the WS consumer uses; the client
+    flips its own sent messages to "read" when ``reader_id`` is the
+    peer. Called by MarkReadView after messages are marked read.
+    """
+    channel_layer = get_channel_layer()
+    if channel_layer is None:
+        return
+    async_to_sync(channel_layer.group_send)(
+        f"chat_{room_id}",
+        {
+            "type": "chat.read",
+            "room_id": room_id,
+            "reader_id": reader_id,
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # Room views
 # ---------------------------------------------------------------------------
@@ -107,10 +128,26 @@ class RoomListCreateView(APIView):
 
     def get(self, request: Request) -> Response:
         rooms = ChatRoom.get_for_user(str(request.user.pk))
-        return Response(
-            ChatRoomSerializer(rooms, many=True).data,
-            status=status.HTTP_200_OK,
-        )
+        user_id = str(request.user.pk)
+
+        # Inbox enrichment (FIX 8): each room carries its most recent
+        # message and the requester's unread count, so the client can
+        # build inbox previews from this one response instead of one
+        # listMessages call per room. Both lookups are batched into a
+        # single aggregation each — O(1) queries, not O(rooms).
+        room_ids = [room.room_id for room in rooms]
+        last_messages = Message.last_messages_for_rooms(room_ids)
+        unread_counts = Message.unread_counts_for_rooms(room_ids, user_id)
+
+        data = ChatRoomSerializer(rooms, many=True).data
+        for item in data:
+            last = last_messages.get(item["room_id"])
+            item["last_message"] = (
+                last.to_broadcast_dict() if last is not None else None
+            )
+            item["unread_count"] = unread_counts.get(item["room_id"], 0)
+
+        return Response(data, status=status.HTTP_200_OK)
 
     def post(self, request: Request) -> Response:
         serializer = CreateRoomSerializer(data=request.data)
@@ -323,6 +360,10 @@ class MarkReadView(APIView):
     The app calls this when a thread is opened, so unread badges
     clear server-side and stay cleared across devices and restarts.
 
+    After marking, a ``chat.read`` frame is broadcast to the room so
+    the sender's ticks flip live (no broadcast when nothing was newly
+    marked — there is no state change to report).
+
     Response: {"room_id": "...", "marked_read": <int>}
     """
 
@@ -338,6 +379,8 @@ class MarkReadView(APIView):
             return denied
 
         marked = Message.mark_room_read(room_id, str(request.user.pk))
+        if marked:
+            _broadcast_read(room_id, str(request.user.pk))
         return Response(
             {"room_id": room_id, "marked_read": marked},
             status=status.HTTP_200_OK,

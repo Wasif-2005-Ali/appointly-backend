@@ -363,3 +363,50 @@ class MeAPITests(TestCase):
         response = self.client.get(self.me_url)
 
         self.assertEqual(response.status_code, 401)
+
+
+class UserDetailAPITests(TestCase):
+    """GET /api/v1/auth/users/<id>/ — look up one user by ID (FIX 9)."""
+
+    def setUp(self):
+        self.client = APIClient()
+
+        self.user = User.objects.create_user(
+            email='detail.me@example.com',
+            full_name='Detail Me',
+            profession='Student',
+        )
+        self.other = User.objects.create_user(
+            email='detail.other@example.com',
+            full_name='Detail Other',
+            profession='Doctor',
+        )
+
+        access = str(RefreshToken.for_user(self.user).access_token)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {access}')
+
+    def test_authenticated_user_can_look_up_another_user(self):
+        response = self.client.get(f'/api/v1/auth/users/{self.other.id}/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['id'], self.other.id)
+        self.assertEqual(response.data['full_name'], 'Detail Other')
+        self.assertEqual(response.data['email'], 'detail.other@example.com')
+        self.assertEqual(response.data['profession'], 'Doctor')
+
+    def test_user_can_look_up_themselves(self):
+        response = self.client.get(f'/api/v1/auth/users/{self.user.id}/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['id'], self.user.id)
+
+    def test_unknown_user_returns_404(self):
+        response = self.client.get('/api/v1/auth/users/999999/')
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_unauthenticated_user_cannot_look_up(self):
+        self.client.credentials()  # clear auth
+        response = self.client.get(f'/api/v1/auth/users/{self.other.id}/')
+
+        self.assertEqual(response.status_code, 401)

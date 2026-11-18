@@ -20,7 +20,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import CallSession
+from .models import CallSession, CallStatus
 from .serializers import CallSessionSerializer
 
 logger = logging.getLogger(__name__)
@@ -115,6 +115,12 @@ class CallEndView(APIView):
     def _broadcast_ended(session: CallSession, ended_by: str) -> None:
         """Best-effort ``call.ended`` broadcast to the call group.
 
+        If the call ended while still RINGING (status ``missed``), a
+        ``call.cancelled`` frame is also sent to the callee's user
+        group — same as ``CallConsumer._handle_end`` — so the callee's
+        incoming-call dialog is dismissed (the callee never joined
+        the call group, so ``call.ended`` alone never reaches them).
+
         A channel-layer failure must not fail the REST call itself —
         the session is already ended in the DB.
         """
@@ -122,7 +128,8 @@ class CallEndView(APIView):
             channel_layer = get_channel_layer()
             if channel_layer is None:
                 return
-            async_to_sync(channel_layer.group_send)(
+            send = async_to_sync(channel_layer.group_send)
+            send(
                 f"call_{session.call_id}",
                 {
                     "type": "call.ended",
@@ -130,6 +137,14 @@ class CallEndView(APIView):
                     "ended_by": ended_by,
                 },
             )
+            if session.status == CallStatus.MISSED:
+                send(
+                    f"user_{session.callee_id}",
+                    {
+                        "type": "call.cancelled",
+                        "call_id": session.call_id,
+                    },
+                )
         except Exception:
             logger.exception(
                 "Failed to broadcast call.ended for %s", session.call_id

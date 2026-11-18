@@ -184,6 +184,12 @@ class Message:
         Original filename for ``image``/``file`` messages (None for text).
     file_size : Optional[int]
         Upload size in bytes for ``image``/``file`` messages (None for text).
+    reply_to_id : Optional[str]
+        Server id of the message this one replies to (None if not a
+        reply). MongoDB is schemaless — older documents simply lack
+        the field and read back as None.
+    reply_to_text : Optional[str]
+        Quoted snippet of the replied-to message (None if not a reply).
     read_by : list[str]
         User IDs who have read this message.
     created_at : datetime
@@ -199,6 +205,8 @@ class Message:
     message_type: str = "text"
     file_name: Optional[str] = None
     file_size: Optional[int] = None
+    reply_to_id: Optional[str] = None
+    reply_to_text: Optional[str] = None
     read_by: list[str] = field(default_factory=list)
     created_at: datetime = field(default_factory=_now)
     _id: Optional[ObjectId] = field(default=None, repr=False)
@@ -227,6 +235,8 @@ class Message:
             "message_type": self.message_type,
             "file_name": self.file_name,
             "file_size": self.file_size,
+            "reply_to_id": self.reply_to_id,
+            "reply_to_text": self.reply_to_text,
             "read_by": self.read_by,
             "created_at": self.created_at.isoformat(),
         }
@@ -242,6 +252,8 @@ class Message:
             message_type=data.get("message_type", "text"),
             file_name=data.get("file_name"),
             file_size=data.get("file_size"),
+            reply_to_id=data.get("reply_to_id"),
+            reply_to_text=data.get("reply_to_text"),
             read_by=data.get("read_by", []),
             created_at=_as_aware(data.get("created_at")) or _now(),
             _id=data.get("_id"),
@@ -262,6 +274,8 @@ class Message:
         message_type: str = "text",
         file_name: Optional[str] = None,
         file_size: Optional[int] = None,
+        reply_to_id: Optional[str] = None,
+        reply_to_text: Optional[str] = None,
     ) -> "Message":
         """Persist a new message and return the populated instance."""
         msg = cls(
@@ -272,6 +286,8 @@ class Message:
             message_type=message_type,
             file_name=file_name,
             file_size=file_size,
+            reply_to_id=reply_to_id,
+            reply_to_text=reply_to_text,
             read_by=[sender_id],    # sender has implicitly read their own message
         )
         result = get_messages_collection().insert_one(msg.to_dict())
@@ -334,3 +350,57 @@ class Message:
             {"$addToSet": {"read_by": user_id}},
         )
         return result.modified_count
+
+    # ------------------------------------------------------------------
+    # Batched inbox enrichment (one aggregation per call, any # of rooms)
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def last_messages_for_rooms(cls, room_ids: list[str]) -> dict[str, "Message"]:
+        """
+        Return the most recent message per room in *room_ids*.
+
+        A single aggregation pipeline (``$match`` + ``$sort`` +
+        ``$group``/``$first``) — no per-room query, so the rooms list
+        stays O(1) queries however many rooms the user has. Rooms with
+        no messages are absent from the result.
+        """
+        if not room_ids:
+            return {}
+        pipeline = [
+            {"$match": {"room_id": {"$in": list(room_ids)}}},
+            {"$sort": {"created_at": -1}},
+            {"$group": {"_id": "$room_id", "doc": {"$first": "$$ROOT"}}},
+        ]
+        return {
+            row["_id"]: cls.from_dict(row["doc"])
+            for row in get_messages_collection().aggregate(pipeline)
+        }
+
+    @classmethod
+    def unread_counts_for_rooms(
+        cls, room_ids: list[str], user_id: str
+    ) -> dict[str, int]:
+        """
+        Return per-room counts of messages *user_id* has not read.
+
+        Counts only messages sent by someone else and not yet in
+        ``read_by`` for *user_id*. A single aggregation pipeline —
+        no per-room query. Rooms with zero unread are absent.
+        """
+        if not room_ids:
+            return {}
+        pipeline = [
+            {
+                "$match": {
+                    "room_id": {"$in": list(room_ids)},
+                    "sender_id": {"$ne": user_id},
+                    "read_by": {"$ne": user_id},
+                }
+            },
+            {"$group": {"_id": "$room_id", "count": {"$sum": 1}}},
+        ]
+        return {
+            row["_id"]: row["count"]
+            for row in get_messages_collection().aggregate(pipeline)
+        }

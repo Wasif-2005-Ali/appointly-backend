@@ -79,6 +79,8 @@ class MessageSerializer(serializers.Serializer):
     message_type     = serializers.CharField(read_only=True)
     file_name        = serializers.CharField(read_only=True, allow_null=True)
     file_size        = serializers.IntegerField(read_only=True, allow_null=True)
+    reply_to_id      = serializers.CharField(read_only=True, allow_null=True)
+    reply_to_text    = serializers.CharField(read_only=True, allow_null=True)
     read_by          = serializers.ListField(child=serializers.CharField(), read_only=True)
     created_at       = serializers.DateTimeField(read_only=True)
 

@@ -30,6 +30,13 @@ Full signaling flow
   call.initiate ──────────► create CallSession
                             group_send user_<B>  ────► call.incoming
                                                         (via UserNotifyConsumer)
+                            call.ringing ◄──────── (notify forwards
+                                                     incoming, then rings
+                                                     the call group)
+  call.ringing ◄───────────
+  call.end (while ringing) ► session → missed
+                            group_send user_<B>  ────► call.cancelled
+                                                        (dismiss dialog)
                                                   CALLEE connects to ws/notify/
                                                   CALLEE connects to ws/call/<id>/
                                                         ◄── call.peer_joined (bidirectional)
@@ -103,7 +110,7 @@ def _parse_qs(scope) -> dict[bytes, bytes]:
     }
 
 
-async def _reject_with_code(consumer, code: int) -> None:
+async def _reject_with_code(consumer, code: int, reason: str | None = None) -> None:
     """
     Accept the socket, then close it with *code*.
 
@@ -111,9 +118,26 @@ async def _reject_with_code(consumer, code: int) -> None:
     HTTP 403, so the client never receives the close code and burns
     all its reconnect attempts on a dead token. Accept-then-close
     delivers the code in a real WebSocket close frame.
+
+    Both sends are awaited and the rejection is logged with its code,
+    reason and path: if a client ever reports a missing close code
+    again, the server log shows whether the close was actually issued.
+    (Live probes in Nov 2026 showed the frame never arriving despite
+    this code running and a local Daphne control delivering it
+    immediately — that points at the Render edge/proxy swallowing the
+    close frame, not at the app. No artificial delay is inserted
+    between accept and close: the frame must go out immediately.)
     """
-    await consumer.accept()
-    await consumer.close(code=code)
+    path = consumer.scope.get("path", "?")
+    logger.warning(
+        "WS reject: code=%s reason=%s path=%s", code, reason or "-", path
+    )
+    try:
+        await consumer.accept()
+        await consumer.close(code=code, reason=reason)
+    except Exception:
+        # Client already gone mid-handshake — nothing left to deliver.
+        logger.exception("WS reject failed: code=%s path=%s", code, path)
 
 
 # ---------------------------------------------------------------------------
@@ -156,7 +180,7 @@ class CallConsumer(AsyncJsonWebsocketConsumer):
         # 1. Authenticate
         self.user = await database_sync_to_async(_get_user_from_token)(token)
         if self.user is None:
-            await _reject_with_code(self, 4001)
+            await _reject_with_code(self, 4001, "invalid or expired token")
             return
 
         self.user_id: str = str(self.user.pk)
@@ -172,11 +196,11 @@ class CallConsumer(AsyncJsonWebsocketConsumer):
         if self.session is not None:
             # Session exists — must be a participant
             if not self.session.is_participant(self.user_id):
-                await _reject_with_code(self, 4003)
+                await _reject_with_code(self, 4003, "not a participant of this call")
                 return
             # Already in a terminal state — reject new connections
             if self.session.is_terminal:
-                await _reject_with_code(self, 4008)
+                await _reject_with_code(self, 4008, "call already ended")
                 return
 
         # 3. Join the call group and the personal user group
@@ -389,7 +413,12 @@ class CallConsumer(AsyncJsonWebsocketConsumer):
         """
         Called by the **callee** to decline the call.
 
-        Frame: { "type": "call.reject" }
+        Frame: { "type": "call.reject", "reason": "busy" | "declined" }
+
+        ``reason`` is optional (default ``"declined"``) and is included
+        in the ``call.rejected`` frame so the caller can tell "user is
+        busy" apart from a plain decline. Unknown values fall back to
+        ``"declined"``.
         """
         if not await self._require_session():
             return
@@ -400,16 +429,24 @@ class CallConsumer(AsyncJsonWebsocketConsumer):
             await self._error("forbidden", "Only the callee can reject the call.")
             return
 
+        reason = content.get("reason", "declined")
+        if reason not in {"busy", "declined"}:
+            reason = "declined"
+
         await database_sync_to_async(self.session.reject)()
 
         await self.channel_layer.group_send(
             self.group_name,
             {
                 "type":    "call.rejected",
+                "reason":  reason,
                 "session": self.session.to_broadcast_dict(),
             },
         )
-        logger.info("Call rejected: call_id=%s by user=%s", self.call_id, self.user_id)
+        logger.info(
+            "Call rejected: call_id=%s by user=%s reason=%s",
+            self.call_id, self.user_id, reason,
+        )
 
     async def _handle_end(self, content: dict) -> None:
         """
@@ -443,6 +480,22 @@ class CallConsumer(AsyncJsonWebsocketConsumer):
                 "ended_by": self.user_id,
             },
         )
+
+        if self.session.status == CallStatus.MISSED:
+            # The call never connected, so the callee never joined the
+            # call group and never saw call.ended — their incoming-call
+            # dialog would linger. Tell their notify socket explicitly.
+            # (Status is checked AFTER end(): end() reloads from the DB,
+            # so this is correct even when this consumer's copy was
+            # stale — ringing → missed, connected → ended.)
+            await self.channel_layer.group_send(
+                f"user_{self.session.callee_id}",
+                {
+                    "type":    "call.cancelled",
+                    "call_id": self.call_id,
+                },
+            )
+
         logger.info(
             "Call ended: call_id=%s by user=%s  duration=%.1fs",
             self.call_id, self.user_id,
@@ -610,6 +663,28 @@ class CallConsumer(AsyncJsonWebsocketConsumer):
         """
         await self.send_json(event)
 
+    async def call_ringing(self, event: dict) -> None:
+        """
+        The callee's phone is ringing — forward to the local client.
+
+        Sent to the call group by UserNotifyConsumer after it delivers
+        ``call.incoming`` to the callee's notify socket. The caller
+        uses it to show the ringing state.
+        """
+        await self.send_json(event)
+
+    async def call_cancelled(self, event: dict) -> None:
+        """
+        A RINGING call was ended before it connected — forward to the
+        local client so it can dismiss the incoming-call dialog.
+
+        Sent to the callee's user group (``user_<callee_id>``) by
+        ``_handle_end`` / the REST end endpoint. This consumer is in
+        that group too (it joins ``user_<id>`` on connect), so the
+        handler must exist here as well as on UserNotifyConsumer.
+        """
+        await self.send_json(event)
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
@@ -688,7 +763,7 @@ class UserNotifyConsumer(AsyncJsonWebsocketConsumer):
 
         self.user = await database_sync_to_async(_get_user_from_token)(token)
         if self.user is None:
-            await _reject_with_code(self, 4001)
+            await _reject_with_code(self, 4001, "invalid or expired token")
             return
 
         self.user_id: str   = str(self.user.pk)
@@ -719,5 +794,44 @@ class UserNotifyConsumer(AsyncJsonWebsocketConsumer):
     # ------------------------------------------------------------------
 
     async def call_incoming(self, event: dict) -> None:
-        """Forward an incoming-call event to the connected client."""
+        """
+        Forward an incoming-call event to the connected client, then
+        tell the caller the callee's phone is ringing.
+
+        The ``call.ringing`` frame goes to the CALL GROUP
+        (``call_<call_id>``) so the caller's CallConsumer receives it.
+        It is only sent while the session is still RINGING — if the
+        caller hung up in the meantime, a stale ringing frame would
+        confuse the caller. The status check fails open: if the lookup
+        errors, the ringing frame is still sent (the call was initiated
+        moments ago, so it is overwhelmingly likely still ringing).
+        """
+        await self.send_json(event)
+
+        session = None
+        try:
+            session = await database_sync_to_async(CallSession.get_by_call_id)(
+                event["call_id"]
+            )
+        except Exception:
+            logger.exception(
+                "call.incoming: session lookup failed for %s",
+                event.get("call_id"),
+            )
+        if session is not None and session.status != CallStatus.RINGING:
+            return
+
+        await self.channel_layer.group_send(
+            f"call_{event['call_id']}",
+            {
+                "type":    "call.ringing",
+                "call_id": event["call_id"],
+            },
+        )
+
+    async def call_cancelled(self, event: dict) -> None:
+        """
+        A RINGING call was ended before it connected — forward to the
+        connected client so it can dismiss the incoming-call dialog.
+        """
         await self.send_json(event)

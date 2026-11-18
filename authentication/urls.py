@@ -7,6 +7,7 @@ from .views import (
     LogoutView,
     MeView,
     RegisterView,
+    UserDetailView,
     UserSearchView,
 )
 from .password_reset_views import (
@@ -21,6 +22,7 @@ urlpatterns = [
     path('logout/', LogoutView.as_view(), name='logout'),
     path('me/', MeView.as_view(), name='me'),
     path('users/', UserSearchView.as_view(), name='user_search'),
+    path('users/<int:user_id>/', UserDetailView.as_view(), name='user_detail'),
     path('token/verify/', TokenVerifyView.as_view(), name='token_verify'),
     path('token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path(
