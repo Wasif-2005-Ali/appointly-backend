@@ -58,6 +58,28 @@ class AppointmentApiTests(TestCase):
         self.assertEqual(appointment.requester_id, str(self.requester.pk))
         self.assertEqual(response.data["requester_id"], str(self.requester.pk))
 
+    def test_appointment_payload_includes_full_names(self):
+        """List/detail payloads carry provider_name and requester_name
+        (full names) so the app shows real names, not 'Provider #<id>'."""
+        starts_at, ends_at = self.future_interval()
+        response = self.client.post(
+            "/api/v1/appointments/",
+            {
+                "provider_id": str(self.provider.pk),
+                "starts_at": starts_at,
+                "ends_at": ends_at,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["requester_name"], "Requester")
+        self.assertEqual(response.data["provider_name"], "Provider")
+
+        listed = self.client.get("/api/v1/appointments/")
+        self.assertEqual(listed.status_code, 200)
+        self.assertEqual(listed.data[0]["requester_name"], "Requester")
+        self.assertEqual(listed.data[0]["provider_name"], "Provider")
+
     def test_overlapping_booking_returns_conflict(self):
         starts_at, ends_at = self.future_interval()
         Appointment.objects.create(
