@@ -128,6 +128,20 @@ MONGODB_NAME = env('MONGODB_NAME', default='appointly')
 
 
 # ---------------------------------------------------------------------------
+# Password hashing
+# ---------------------------------------------------------------------------
+# Django 6.1's default PBKDF2 hasher runs 1,500,000 iterations, which
+# costs ~4.5s per login on Render's free CPU. 600,000 iterations is the
+# OWASP minimum for PBKDF2-HMAC-SHA256 — fast enough to fix the login
+# lag while staying within the recommendation. Existing password hashes
+# keep working: the iteration count is stored in the hash itself, so an
+# old hash still verifies against its own count.
+PASSWORD_HASHERS = [
+    "appointly.hashers.PBKDF2PasswordHasher600k",
+]
+
+
+# ---------------------------------------------------------------------------
 # Password validation
 # ---------------------------------------------------------------------------
 AUTH_PASSWORD_VALIDATORS = [
