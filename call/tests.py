@@ -278,6 +278,38 @@ class CallConsumerTests(CallSessionTestMixin, TransactionTestCase):
             f"/ws/call/{call_id}/?token={self._token(user)}",
         )
 
+    def _notify_communicator(self, user):
+        return WebsocketCommunicator(
+            self.application,
+            f"/ws/notify/?token={self._token(user)}",
+        )
+
+    async def _initiate_ringing_call(self):
+        """Connect caller + callee call sockets and initiate (no accept).
+
+        Returns (ws_caller, ws_callee, call_id) with the session RINGING.
+        """
+        call_id = uuid.uuid4().hex
+        ws_caller = self._communicator(self.caller, call_id)
+        connected, _ = await ws_caller.connect()
+        self.assertTrue(connected)
+
+        await ws_caller.send_json_to({
+            "type": "call.initiate",
+            "callee_id": str(self.callee.pk),
+            "call_type": "video",
+        })
+        initiated = await ws_caller.receive_json_from(timeout=5)
+        self.assertEqual(initiated["session"]["status"], "ringing")
+
+        ws_callee = self._communicator(self.callee, call_id)
+        connected, _ = await ws_callee.connect()
+        self.assertTrue(connected)
+        peer = await ws_caller.receive_json_from(timeout=5)
+        self.assertEqual(peer["type"], "call.peer_connected")
+
+        return ws_caller, ws_callee, call_id
+
     async def _connect_call(self):
         """Connect caller + callee, initiate, accept. Returns communicators."""
         call_id = uuid.uuid4().hex
@@ -503,6 +535,168 @@ class CallConsumerTests(CallSessionTestMixin, TransactionTestCase):
         await ws_caller.disconnect()
         await ws_callee.disconnect()
 
+    # -- FIX 2: notify consumer close code -----------------------------
+
+    async def test_notify_invalid_token_close_code_reaches_client(self):
+        """The notify consumer's 4001 reject must reach the client too
+        (previously the only reject path with no close-code test)."""
+        comm = WebsocketCommunicator(
+            self.application,
+            "/ws/notify/?token=not-a-real-token",
+        )
+        await self._expect_close_code(comm, 4001)
+
+    # -- FIX 3: call.ringing -------------------------------------------
+
+    async def test_caller_receives_ringing_when_callee_notified(self):
+        """After call.incoming reaches the callee's notify socket, the
+        caller gets a call.ringing frame on the call socket."""
+        call_id = uuid.uuid4().hex
+        ws_caller = self._communicator(self.caller, call_id)
+        connected, _ = await ws_caller.connect()
+        self.assertTrue(connected)
+
+        ws_notify = self._notify_communicator(self.callee)
+        connected, _ = await ws_notify.connect()
+        self.assertTrue(connected)
+
+        await ws_caller.send_json_to({
+            "type": "call.initiate",
+            "callee_id": str(self.callee.pk),
+            "call_type": "video",
+        })
+        initiated = await ws_caller.receive_json_from(timeout=5)
+        self.assertEqual(initiated["type"], "call.initiated")
+
+        incoming = await ws_notify.receive_json_from(timeout=5)
+        self.assertEqual(incoming["type"], "call.incoming")
+        self.assertEqual(incoming["call_id"], call_id)
+
+        ringing = await ws_caller.receive_json_from(timeout=5)
+        self.assertEqual(ringing["type"], "call.ringing")
+        self.assertEqual(ringing["call_id"], call_id)
+
+        await ws_caller.disconnect()
+        await ws_notify.disconnect()
+
+    async def test_no_ringing_when_callee_has_no_notify_socket(self):
+        """With no notify socket connected, call.incoming goes nowhere
+        and no call.ringing is (or can be) produced."""
+        call_id = uuid.uuid4().hex
+        ws_caller = self._communicator(self.caller, call_id)
+        connected, _ = await ws_caller.connect()
+        self.assertTrue(connected)
+
+        await ws_caller.send_json_to({
+            "type": "call.initiate",
+            "callee_id": str(self.callee.pk),
+            "call_type": "video",
+        })
+        initiated = await ws_caller.receive_json_from(timeout=5)
+        self.assertEqual(initiated["type"], "call.initiated")
+
+        self.assertTrue(await ws_caller.receive_nothing(timeout=2))
+
+        await ws_caller.disconnect()
+
+    # -- FIX 4: call.cancelled -----------------------------------------
+
+    async def test_callee_notified_when_ringing_call_cancelled(self):
+        """Caller hangs up while ringing: the callee's notify socket
+        gets call.cancelled so the incoming-call dialog dismisses."""
+        call_id = uuid.uuid4().hex
+        ws_caller = self._communicator(self.caller, call_id)
+        connected, _ = await ws_caller.connect()
+        self.assertTrue(connected)
+
+        ws_notify = self._notify_communicator(self.callee)
+        connected, _ = await ws_notify.connect()
+        self.assertTrue(connected)
+
+        await ws_caller.send_json_to({
+            "type": "call.initiate",
+            "callee_id": str(self.callee.pk),
+            "call_type": "video",
+        })
+        await ws_caller.receive_json_from(timeout=5)   # call.initiated
+        await ws_notify.receive_json_from(timeout=5)   # call.incoming
+        await ws_caller.receive_json_from(timeout=5)   # call.ringing
+
+        await ws_caller.send_json_to({"type": "call.end"})
+        ended = await ws_caller.receive_json_from(timeout=5)
+        self.assertEqual(ended["type"], "call.ended")
+        self.assertEqual(ended["session"]["status"], "missed")
+
+        cancelled = await ws_notify.receive_json_from(timeout=5)
+        self.assertEqual(cancelled["type"], "call.cancelled")
+        self.assertEqual(cancelled["call_id"], call_id)
+
+        await ws_caller.disconnect()
+        await ws_notify.disconnect()
+
+    async def test_no_cancelled_when_connected_call_ends(self):
+        """call.cancelled is only for RINGING calls: ending a connected
+        call must not send it to the callee's notify socket."""
+        ws_caller, ws_callee, call_id = await self._connect_call()
+
+        ws_notify = self._notify_communicator(self.callee)
+        connected, _ = await ws_notify.connect()
+        self.assertTrue(connected)
+
+        await ws_caller.send_json_to({"type": "call.end"})
+        ended = await ws_caller.receive_json_from(timeout=5)
+        self.assertEqual(ended["type"], "call.ended")
+        self.assertEqual(ended["session"]["status"], "ended")
+        await ws_callee.receive_json_from(timeout=5)
+
+        self.assertTrue(await ws_notify.receive_nothing(timeout=2))
+
+        await ws_caller.disconnect()
+        await ws_callee.disconnect()
+        await ws_notify.disconnect()
+
+    # -- FIX 5: reject reason ------------------------------------------
+
+    async def test_reject_with_busy_reason_reaches_caller(self):
+        ws_caller, ws_callee, call_id = await self._initiate_ringing_call()
+
+        await ws_callee.send_json_to({"type": "call.reject", "reason": "busy"})
+        caller_frame = await ws_caller.receive_json_from(timeout=5)
+        callee_frame = await ws_callee.receive_json_from(timeout=5)
+
+        self.assertEqual(caller_frame["type"], "call.rejected")
+        self.assertEqual(caller_frame["reason"], "busy")
+        self.assertEqual(caller_frame["session"]["status"], "rejected")
+        self.assertEqual(callee_frame["reason"], "busy")
+
+        await ws_caller.disconnect()
+        await ws_callee.disconnect()
+
+    async def test_reject_without_reason_defaults_to_declined(self):
+        ws_caller, ws_callee, call_id = await self._initiate_ringing_call()
+
+        await ws_callee.send_json_to({"type": "call.reject"})
+        caller_frame = await ws_caller.receive_json_from(timeout=5)
+        await ws_callee.receive_json_from(timeout=5)
+
+        self.assertEqual(caller_frame["type"], "call.rejected")
+        self.assertEqual(caller_frame["reason"], "declined")
+
+        await ws_caller.disconnect()
+        await ws_callee.disconnect()
+
+    async def test_reject_with_unknown_reason_defaults_to_declined(self):
+        ws_caller, ws_callee, call_id = await self._initiate_ringing_call()
+
+        await ws_callee.send_json_to({"type": "call.reject", "reason": "maybe"})
+        caller_frame = await ws_caller.receive_json_from(timeout=5)
+        await ws_callee.receive_json_from(timeout=5)
+
+        self.assertEqual(caller_frame["reason"], "declined")
+
+        await ws_caller.disconnect()
+        await ws_callee.disconnect()
+
 
 class CallEndRestTests(CallSessionTestMixin, TransactionTestCase):
     """POST /api/call/<call_id>/end/ — REST fallback when the WS is dead."""
@@ -588,3 +782,54 @@ class CallEndRestTests(CallSessionTestMixin, TransactionTestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["status"], "ended")
+
+    def test_ending_ringing_call_broadcasts_cancelled_to_callee(self):
+        """FIX 4 via REST: ending a ringing call over the REST fallback
+        must also send call.cancelled to the callee's user group, so
+        their incoming-call dialog dismisses."""
+        session = self.make_session(
+            caller_id=str(self.caller.pk), callee_id=str(self.callee.pk)
+        )
+        mock_layer = mock.MagicMock()
+        mock_layer.group_send = mock.AsyncMock()
+        with mock.patch(
+            "call.views.get_channel_layer", return_value=mock_layer
+        ):
+            self._auth_as(self.caller)
+            response = self.client.post(f"/api/call/{session.call_id}/end/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["status"], "missed")
+
+        sent = [
+            (call.args[0], call.args[1])
+            for call in mock_layer.group_send.await_args_list
+        ]
+        self.assertIn(
+            (f"call_{session.call_id}", mock.ANY), sent
+        )
+        cancelled = [
+            event for group, event in sent
+            if group == f"user_{self.callee.pk}"
+        ]
+        self.assertEqual(len(cancelled), 1)
+        self.assertEqual(cancelled[0]["type"], "call.cancelled")
+        self.assertEqual(cancelled[0]["call_id"], session.call_id)
+
+    def test_ending_connected_call_broadcasts_only_ended(self):
+        """No call.cancelled for a connected call ended over REST."""
+        session = self._connected_session()
+        mock_layer = mock.MagicMock()
+        mock_layer.group_send = mock.AsyncMock()
+        with mock.patch(
+            "call.views.get_channel_layer", return_value=mock_layer
+        ):
+            self._auth_as(self.caller)
+            response = self.client.post(f"/api/call/{session.call_id}/end/")
+
+        self.assertEqual(response.status_code, 200)
+        types = [
+            call.args[1]["type"]
+            for call in mock_layer.group_send.await_args_list
+        ]
+        self.assertEqual(types, ["call.ended"])
