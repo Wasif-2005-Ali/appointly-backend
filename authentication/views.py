@@ -337,3 +337,28 @@ class UserSearchView(APIView):
             [_user_response(user) for user in users],
             status=status.HTTP_200_OK,
         )
+
+
+class UserDetailView(APIView):
+    """GET /api/v1/auth/users/<id>/ — look up one user by ID.
+
+    Returns {id, full_name, email, profession}, or 404 if the user
+    does not exist. Used by the app to resolve names in call history
+    (instead of showing "User #id"). Any authenticated user may look
+    up any other user — the fields returned are the same public
+    profile fields the user search endpoint returns."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, user_id):
+        try:
+            user = User.objects.get(pk=user_id)
+        except User.DoesNotExist:
+            return Response(
+                {'detail': f"User with id '{user_id}' does not exist."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        return Response(
+            _user_response(user),
+            status=status.HTTP_200_OK,
+        )
