@@ -12,7 +12,9 @@ Flow
 Message frames (JSON)
 ----------------------
 Client → Server
-    { "type": "chat.message", "content": "Hello!", "message_type": "text" }
+    { "type": "chat.message", "content": "Hello!", "message_type": "text",
+      "reply_to_id": "<optional server message id>",
+      "reply_to_text": "<optional quoted snippet>" }
 
 Server → Client
     {
@@ -24,10 +26,15 @@ Server → Client
             "sender_username": "...",
             "content": "Hello!",
             "message_type": "text",
+            "reply_to_id": null,
+            "reply_to_text": null,
             "read_by": ["..."],
             "created_at": "2026-10-05T..."
         }
     }
+
+    { "type": "chat.read", "room_id": "...", "reader_id": "..." }
+        — sent when a member marks the room read (MarkReadView).
 
 Error frames (Server → Client)
     { "type": "error", "code": "...", "detail": "..." }
@@ -75,7 +82,7 @@ def _get_user_from_token(token: str):
         return None
 
 
-async def _reject_with_code(consumer, code: int) -> None:
+async def _reject_with_code(consumer, code: int, reason: str | None = None) -> None:
     """
     Accept the socket, then close it with *code*.
 
@@ -83,9 +90,26 @@ async def _reject_with_code(consumer, code: int) -> None:
     HTTP 403, so the client never receives the close code and burns
     all its reconnect attempts on a dead token. Accept-then-close
     delivers the code in a real WebSocket close frame.
+
+    Both sends are awaited and the rejection is logged with its code,
+    reason and path: if a client ever reports a missing close code
+    again, the server log shows whether the close was actually issued.
+    (Live probes in Nov 2026 showed the frame never arriving despite
+    this code running and a local Daphne control delivering it
+    immediately — that points at the Render edge/proxy swallowing the
+    close frame, not at the app. No artificial delay is inserted
+    between accept and close: the frame must go out immediately.)
     """
-    await consumer.accept()
-    await consumer.close(code=code)
+    path = consumer.scope.get("path", "?")
+    logger.warning(
+        "WS reject: code=%s reason=%s path=%s", code, reason or "-", path
+    )
+    try:
+        await consumer.accept()
+        await consumer.close(code=code, reason=reason)
+    except Exception:
+        # Client already gone mid-handshake — nothing left to deliver.
+        logger.exception("WS reject failed: code=%s path=%s", code, path)
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +146,7 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         # 2. Authenticate
         self.user = await database_sync_to_async(_get_user_from_token)(token)
         if self.user is None:
-            await _reject_with_code(self, 4001)
+            await _reject_with_code(self, 4001, "invalid or expired token")
             return
 
         # 3. Validate room
@@ -132,12 +156,12 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         )(self.room_id)
 
         if room is None:
-            await _reject_with_code(self, 4004)
+            await _reject_with_code(self, 4004, "room not found")
             return
 
         # Optional: enforce membership
         if str(self.user.pk) not in room.participants:
-            await _reject_with_code(self, 4003)
+            await _reject_with_code(self, 4003, "not a member of this room")
             return
 
         # 4. Join Channels group
@@ -189,7 +213,16 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
     # ------------------------------------------------------------------
 
     async def _handle_chat_message(self, content: dict) -> None:
-        """Persist a message to MongoDB and broadcast it to the room."""
+        """
+        Persist a message to MongoDB and broadcast it to the room.
+
+        Optional reply-quote fields (FIX 6):
+            reply_to_id   — server id of the message being replied to
+            reply_to_text — quoted snippet of that message (capped)
+        Both are stored on the Message and included in the broadcast
+        dict (and the REST serializer) so the other party can render
+        the quote.
+        """
         raw_content: str = (content.get("content") or "").strip()
         if not raw_content:
             await self.send_json({
@@ -203,6 +236,14 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         if message_type not in {"text", "image", "file"}:
             message_type = "text"
 
+        reply_to_id = content.get("reply_to_id") or None
+        if reply_to_id is not None:
+            reply_to_id = str(reply_to_id)
+        reply_to_text = content.get("reply_to_text") or None
+        if reply_to_text is not None:
+            # A quote is a snippet, not a second message body.
+            reply_to_text = str(reply_to_text).strip()[:500] or None
+
         # Persist to MongoDB (sync call on thread pool)
         msg: Message = await database_sync_to_async(Message.send)(
             room_id=self.room_id,
@@ -210,6 +251,8 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
             sender_username=self.user.get_username(),
             content=raw_content,
             message_type=message_type,
+            reply_to_id=reply_to_id,
+            reply_to_text=reply_to_text,
         )
 
         # Broadcast to all members of the group (including the sender)
@@ -260,4 +303,18 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         await self.send_json({
             "type": "chat.message",
             "message": event["message"],
+        })
+
+    async def chat_read(self, event: dict) -> None:
+        """
+        Forward a ``chat.read`` group event to the WebSocket client.
+
+        Sent by MarkReadView after a member marks the room read
+        (chat/views.py). The client flips its own sent messages to
+        "read" when ``reader_id`` is the peer.
+        """
+        await self.send_json({
+            "type": "chat.read",
+            "room_id": event["room_id"],
+            "reader_id": event["reader_id"],
         })
