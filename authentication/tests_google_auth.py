@@ -8,6 +8,7 @@ real network calls or genuine Google credentials are used.
 from unittest.mock import MagicMock, patch
 
 from django.test import SimpleTestCase, override_settings
+from google.auth.exceptions import TransportError
 
 from authentication.google_auth import GoogleAuthError, verify_google_id_token
 from authentication.google_serializers import GoogleAuthSerializer
@@ -118,6 +119,28 @@ class VerifyGoogleIdTokenWrongAudienceTest(SimpleTestCase):
             verify_google_id_token('wrong-audience-token')
 
         self.assertIn('Invalid Google ID token', ctx.exception.detail)
+
+
+# ======================================================================
+# verify_google_id_token – TransportError (Google unreachable)
+# ======================================================================
+
+@override_settings(GOOGLE_CLIENT_ID=FAKE_CLIENT_ID)
+class VerifyGoogleIdTokenTransportErrorTest(SimpleTestCase):
+    """Google's cert endpoint unreachable.
+
+    ``google.auth.exceptions.TransportError`` is NOT a ValueError, so
+    the old ``except ValueError`` let it escape as an uncaught 500 on
+    POST /google/. It must surface as a clean GoogleAuthError (which
+    the view turns into a 401).
+    """
+
+    @patch(_VERIFY_PATH, side_effect=TransportError('unreachable'))
+    def test_raises_google_auth_error(self, _mock):
+        with self.assertRaises(GoogleAuthError) as ctx:
+            verify_google_id_token('any-token')
+
+        self.assertIn('temporarily unavailable', ctx.exception.detail)
 
 
 # ======================================================================

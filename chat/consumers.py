@@ -75,6 +75,19 @@ def _get_user_from_token(token: str):
         return None
 
 
+async def _reject_with_code(consumer, code: int) -> None:
+    """
+    Accept the socket, then close it with *code*.
+
+    Closing BEFORE accept makes Daphne answer the handshake with an
+    HTTP 403, so the client never receives the close code and burns
+    all its reconnect attempts on a dead token. Accept-then-close
+    delivers the code in a real WebSocket close frame.
+    """
+    await consumer.accept()
+    await consumer.close(code=code)
+
+
 # ---------------------------------------------------------------------------
 # Main consumer
 # ---------------------------------------------------------------------------
@@ -109,7 +122,7 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         # 2. Authenticate
         self.user = await database_sync_to_async(_get_user_from_token)(token)
         if self.user is None:
-            await self.close(code=4001)
+            await _reject_with_code(self, 4001)
             return
 
         # 3. Validate room
@@ -119,12 +132,12 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         )(self.room_id)
 
         if room is None:
-            await self.close(code=4004)
+            await _reject_with_code(self, 4004)
             return
 
         # Optional: enforce membership
         if str(self.user.pk) not in room.participants:
-            await self.close(code=4003)
+            await _reject_with_code(self, 4003)
             return
 
         # 4. Join Channels group

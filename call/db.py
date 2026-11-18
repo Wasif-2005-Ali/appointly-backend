@@ -15,8 +15,16 @@ from django.conf import settings
 
 @lru_cache(maxsize=1)
 def _get_client() -> pymongo.MongoClient:
-    """Shared MongoClient — one instance per process."""
-    return pymongo.MongoClient(settings.MONGODB_URI)
+    """Shared MongoClient — one instance per process.
+
+    ``tz_aware=True`` is load-bearing: without it PyMongo returns naive
+    datetimes, and ``CallSession.end()`` crashes subtracting an aware
+    ``now`` from a naive ``connected_at`` (live bug, Nov 2026 — the
+    call stayed stuck ``connected`` forever). ``from_dict()`` also
+    normalises defensively, so documents read by any other client
+    still work.
+    """
+    return pymongo.MongoClient(settings.MONGODB_URI, tz_aware=True)
 
 
 def get_db() -> pymongo.database.Database:

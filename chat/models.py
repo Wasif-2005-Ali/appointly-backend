@@ -33,6 +33,23 @@ def _now() -> datetime:
     return datetime.now(tz=timezone.utc)
 
 
+def _as_aware(value: Optional[datetime]) -> Optional[datetime]:
+    """
+    Return *value* as an aware UTC datetime.
+
+    PyMongo returns naive datetimes when the client was created without
+    ``tz_aware=True``. MongoDB stores datetimes as UTC, so a naive value
+    read back IS UTC — attach ``timezone.utc`` instead of mixing naive
+    and aware datetimes downstream (same bug class as the call app's
+    stuck-call crash — see call/models.py).
+    """
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def _new_room_id() -> str:
     """Generate a short UUID-based room slug."""
     return uuid.uuid4().hex[:12]
@@ -89,7 +106,7 @@ class ChatRoom:
             name=data.get("name", ""),
             participants=data.get("participants", []),
             is_group=data.get("is_group", False),
-            created_at=data.get("created_at", _now()),
+            created_at=_as_aware(data.get("created_at")) or _now(),
             _id=data.get("_id"),
         )
 
@@ -226,7 +243,7 @@ class Message:
             file_name=data.get("file_name"),
             file_size=data.get("file_size"),
             read_by=data.get("read_by", []),
-            created_at=data.get("created_at", _now()),
+            created_at=_as_aware(data.get("created_at")) or _now(),
             _id=data.get("_id"),
         )
 

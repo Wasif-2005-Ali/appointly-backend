@@ -10,10 +10,14 @@ from contextlib import nullcontext
 from unittest.mock import MagicMock, patch
 
 from django.db import IntegrityError
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, override_settings
+from google.auth.exceptions import TransportError
 from rest_framework.test import APIRequestFactory
 
-from authentication.google_auth import GoogleAuthError
+from authentication.google_auth import (
+    GoogleAuthError,
+    verify_google_id_token as real_verify_google_id_token,
+)
 from authentication.models import User
 from authentication.views import GoogleAuthView
 
@@ -322,6 +326,30 @@ class GoogleAuthInvalidTokenTest(GoogleAuthViewTestBase):
         self.assertEqual(response.status_code, 400)
         self.assertIn('id_token', response.data)
         self.mock_verify.assert_not_called()
+
+
+class GoogleAuthTransportErrorTest(GoogleAuthViewTestBase):
+    """Google's cert endpoint unreachable: TransportError -> 401, not 500.
+
+    Runs the REAL verify_google_id_token (temporarily replacing the
+    base class's mock) with google-auth's verify_oauth2_token mocked
+    to raise TransportError, exactly as it does on a network failure.
+    """
+
+    @override_settings(GOOGLE_CLIENT_ID='test-client-id-000.apps.googleusercontent.com')
+    def test_transport_error_returns_401(self):
+        with patch(
+            'authentication.views.verify_google_id_token',
+            side_effect=real_verify_google_id_token,
+        ), patch(
+            'authentication.google_auth.id_token.verify_oauth2_token',
+            side_effect=TransportError('unreachable'),
+        ):
+            response = self.post_google()
+
+        self.assertEqual(response.status_code, 401)
+        self.assertIn('temporarily unavailable', response.data['detail'])
+        self.mock_jwt.assert_not_called()
 
     def test_google_unavailable_returns_401(self):
         """GOOGLE_CLIENT_ID not configured on server."""

@@ -1,5 +1,6 @@
 import re
 
+from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
 from common.user_ids import UserIdField
@@ -46,13 +47,40 @@ class AppointmentRescheduleSerializer(serializers.Serializer):
 class AppointmentSerializer(serializers.ModelSerializer):
     requester_id = UserIdField(read_only=True)
     provider_id = UserIdField(read_only=True)
+    # Full display names so the app can show real names instead of
+    # "Provider #<id>". Null when the user no longer exists; the app
+    # falls back to the id in that case.
+    requester_name = serializers.SerializerMethodField()
+    provider_name = serializers.SerializerMethodField()
+
+    def _full_name_for(self, user_id):
+        """Look up a user's full_name, cached per serializer instance
+        so a list response does one query per distinct user."""
+        cache = getattr(self, "_name_cache", None)
+        if cache is None:
+            cache = self._name_cache = {}
+        if user_id not in cache:
+            User = get_user_model()
+            try:
+                cache[user_id] = User.objects.get(pk=user_id).full_name
+            except (User.DoesNotExist, ValueError):
+                cache[user_id] = None
+        return cache[user_id]
+
+    def get_requester_name(self, obj):
+        return self._full_name_for(obj.requester_id)
+
+    def get_provider_name(self, obj):
+        return self._full_name_for(obj.provider_id)
 
     class Meta:
         model = Appointment
         fields = [
             "id",
             "requester_id",
+            "requester_name",
             "provider_id",
+            "provider_name",
             "starts_at",
             "ends_at",
             "status",
