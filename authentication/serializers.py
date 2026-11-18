@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from rest_framework.validators import UniqueValidator
 from django.contrib.auth import password_validation
 
 from .models import User
@@ -34,6 +35,22 @@ class RegisterSerializer(serializers.ModelSerializer):
             'confirm_password',
         ]
         read_only_fields = ['id']
+        # DRF auto-generates a UniqueValidator for the unique email
+        # field, and it fires BEFORE validate_email() — so the
+        # friendly message in validate_email() never surfaced; clients
+        # saw DRF's default "user with this email already exists."
+        # instead. Declaring the validator here replaces the generated
+        # one (extra_kwargs wins) with the same friendly message.
+        extra_kwargs = {
+            'email': {
+                'validators': [
+                    UniqueValidator(
+                        queryset=User.objects.all(),
+                        message='A user with this email already exists.',
+                    ),
+                ],
+            },
+        }
 
     # ------------------------------------------------------------------
     # Field-level validation

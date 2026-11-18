@@ -10,6 +10,7 @@ independently with mocked Google verification.
 import logging
 
 from django.conf import settings
+from google.auth import exceptions as google_exceptions
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token
 
@@ -95,6 +96,14 @@ def verify_google_id_token(token):
         # Covers invalid signatures, expired tokens, wrong audience, etc.
         logger.info('Google ID token verification failed.')
         raise GoogleAuthError('Invalid Google ID token.')
+    except google_exceptions.GoogleAuthError:
+        # google-auth transport failures (e.g. TransportError when
+        # Google's cert endpoint is unreachable) are NOT ValueErrors —
+        # without this they escape as an uncaught 500 on POST /google/.
+        # The client cannot fix a Google outage, so report it as a
+        # failed verification (401) rather than a server error.
+        logger.warning('Google ID token verification failed: transport error.')
+        raise GoogleAuthError('Google authentication is temporarily unavailable.')
 
     # ------------------------------------------------------------------
     # Validate the issuer

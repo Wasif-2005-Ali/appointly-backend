@@ -139,6 +139,32 @@ class RegistrationLoginAPITests(TestCase):
         )
 
         self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.data['email'][0],
+            'A user with this email already exists.',
+        )
+
+    def test_registration_duplicate_email_shows_friendly_message(self):
+        """The exact-case duplicate hits the UniqueValidator (which fires
+        before validate_email): it must carry the friendly message, not
+        DRF's default 'user with this email already exists.'"""
+        response = self.client.post(
+            self.register_url,
+            {
+                'full_name': 'Duplicate User',
+                'email': 'existing@example.com',
+                'profession': 'Student',
+                'password': 'Orange!Mountain#5831',
+                'confirm_password': 'Orange!Mountain#5831',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.data['email'][0],
+            'A user with this email already exists.',
+        )
 
     def test_registration_rejects_password_mismatch(self):
         response = self.client.post(
