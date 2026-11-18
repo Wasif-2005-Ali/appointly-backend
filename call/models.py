@@ -47,6 +47,27 @@ from .db import get_sessions_collection
 
 
 # ---------------------------------------------------------------------------
+# Datetime normalisation
+# ---------------------------------------------------------------------------
+
+def _as_aware(value: Optional[datetime]) -> Optional[datetime]:
+    """
+    Return *value* as an aware UTC datetime.
+
+    PyMongo returns naive datetimes when the client was created without
+    ``tz_aware=True`` (and any pre-existing documents were written that
+    way). MongoDB stores datetimes as UTC, so a naive value read back
+    IS UTC — attach ``timezone.utc`` instead of crashing on an
+    aware-minus-naive subtraction in :meth:`CallSession.end`.
+    """
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+# ---------------------------------------------------------------------------
 # Status constants
 # ---------------------------------------------------------------------------
 
@@ -149,9 +170,9 @@ class CallSession:
             callee_id=        data["callee_id"],
             call_type=        data.get("call_type", "video"),
             status=           data.get("status", CallStatus.RINGING),
-            started_at=       data.get("started_at", datetime.now(tz=timezone.utc)),
-            connected_at=     data.get("connected_at"),
-            ended_at=         data.get("ended_at"),
+            started_at=       _as_aware(data.get("started_at")) or datetime.now(tz=timezone.utc),
+            connected_at=     _as_aware(data.get("connected_at")),
+            ended_at=         _as_aware(data.get("ended_at")),
             duration_seconds= data.get("duration_seconds"),
             _id=              data.get("_id"),
         )
@@ -233,7 +254,7 @@ class CallSession:
             "ended_at": now,
         })
 
-    def end(self) -> None:
+    def end(self) -> bool:
         """
         Transition: connected → ended, or ringing → missed.
 
@@ -247,6 +268,13 @@ class CallSession:
         lands in history as ``missed`` rather than ``ended``. An explicit
         callee reject still goes through :meth:`reject` and stays
         ``rejected`` — this method only handles the end path.
+
+        Returns
+        -------
+        bool
+            ``True`` if this call transitioned the session to a terminal
+            state, ``False`` if it was already terminal (idempotent —
+            callers must only broadcast ``call.ended`` on ``True``).
         """
         fresh = CallSession.get_by_call_id(self.call_id)
         if fresh is not None:
@@ -255,7 +283,7 @@ class CallSession:
             if fresh.status in CallStatus.TERMINAL:
                 # Already ended/rejected/missed by the other side — do
                 # not overwrite the terminal state.
-                return
+                return False
         now = datetime.now(tz=timezone.utc)
         if self.connected_at:
             duration = (now - self.connected_at).total_seconds()
@@ -268,6 +296,7 @@ class CallSession:
             "ended_at":         now,
             "duration_seconds": duration,
         })
+        return True
 
     @property
     def is_terminal(self) -> bool:

@@ -12,5 +12,6 @@ app_name = "call"
 
 urlpatterns = [
     path("history/", views.CallHistoryView.as_view(), name="call-history"),
+    path("<str:call_id>/end/", views.CallEndView.as_view(), name="call-end"),
     path("<str:call_id>/", views.CallDetailView.as_view(), name="call-detail"),
 ]

@@ -103,6 +103,19 @@ def _parse_qs(scope) -> dict[bytes, bytes]:
     }
 
 
+async def _reject_with_code(consumer, code: int) -> None:
+    """
+    Accept the socket, then close it with *code*.
+
+    Closing BEFORE accept makes Daphne answer the handshake with an
+    HTTP 403, so the client never receives the close code and burns
+    all its reconnect attempts on a dead token. Accept-then-close
+    delivers the code in a real WebSocket close frame.
+    """
+    await consumer.accept()
+    await consumer.close(code=code)
+
+
 # ---------------------------------------------------------------------------
 # 1.  CallConsumer
 # ---------------------------------------------------------------------------
@@ -143,7 +156,7 @@ class CallConsumer(AsyncJsonWebsocketConsumer):
         # 1. Authenticate
         self.user = await database_sync_to_async(_get_user_from_token)(token)
         if self.user is None:
-            await self.close(code=4001)
+            await _reject_with_code(self, 4001)
             return
 
         self.user_id: str = str(self.user.pk)
@@ -159,11 +172,11 @@ class CallConsumer(AsyncJsonWebsocketConsumer):
         if self.session is not None:
             # Session exists — must be a participant
             if not self.session.is_participant(self.user_id):
-                await self.close(code=4003)
+                await _reject_with_code(self, 4003)
                 return
             # Already in a terminal state — reject new connections
             if self.session.is_terminal:
-                await self.close(code=4008)
+                await _reject_with_code(self, 4008)
                 return
 
         # 3. Join the call group and the personal user group
@@ -172,6 +185,10 @@ class CallConsumer(AsyncJsonWebsocketConsumer):
 
         # 4. Accept the socket
         await self.accept()
+        # Only a fully-accepted connection counts as "in the call" —
+        # disconnect() uses this to decide whether a dropped socket
+        # should end the session (a rejected connect must not).
+        self._joined = True
 
         # 5. Announce presence so the peer knows we joined
         await self.channel_layer.group_send(
@@ -189,6 +206,12 @@ class CallConsumer(AsyncJsonWebsocketConsumer):
         )
 
     async def disconnect(self, close_code: int) -> None:
+        # If this user drops mid-call (app killed, network lost), end
+        # the session server-side and tell the peer — otherwise the
+        # session stays stuck `connected` and the peer waits forever.
+        # Runs BEFORE group_discard so the peer still gets the event.
+        await self._end_call_on_drop()
+
         if hasattr(self, "group_name"):
             await self.channel_layer.group_discard(self.group_name,          self.channel_name)
             await self.channel_layer.group_discard(f"user_{self.user_id}",   self.channel_name)
@@ -199,6 +222,60 @@ class CallConsumer(AsyncJsonWebsocketConsumer):
             getattr(self, "call_id",  "?"),
             close_code,
         )
+
+    async def _end_call_on_drop(self) -> None:
+        """
+        End a CONNECTED call when this user's socket drops.
+
+        No-op unless this consumer fully joined the call (``_joined``):
+        a rejected connect (bad token / non-participant / terminal
+        session) must never end someone else's call. The session is
+        reloaded from the DB and only ended if still CONNECTED, so a
+        normally-ended call is never double-ended.
+        """
+        if not getattr(self, "_joined", False):
+            return
+        call_id = getattr(self, "call_id", None)
+        user_id = getattr(self, "user_id", None)
+        if not call_id or not user_id:
+            return
+        ended_session = await database_sync_to_async(
+            self._end_connected_session
+        )(call_id, user_id)
+        if ended_session is None:
+            return
+        await self.channel_layer.group_send(
+            self.group_name,
+            {
+                "type":    "peer_disconnected",
+                "user_id": user_id,
+                "call_id": call_id,
+                "session": ended_session.to_broadcast_dict(),
+            },
+        )
+        logger.info(
+            "Call ended by peer disconnect: call_id=%s dropped_user=%s",
+            call_id, user_id,
+        )
+
+    @staticmethod
+    def _end_connected_session(call_id: str, user_id: str) -> Optional[CallSession]:
+        """
+        Sync helper (runs in a thread): reload the session and end it
+        iff the dropping user is a participant and it is still
+        CONNECTED. Returns the ended session, or None if nothing was
+        ended (missing / already terminal / never connected / the user
+        is not a participant).
+        """
+        fresh = CallSession.get_by_call_id(call_id)
+        if (
+            fresh is None
+            or not fresh.is_participant(user_id)
+            or fresh.status != CallStatus.CONNECTED
+        ):
+            return None
+        fresh.end()
+        return fresh
 
     # ------------------------------------------------------------------
     # Receive from client
@@ -349,7 +426,14 @@ class CallConsumer(AsyncJsonWebsocketConsumer):
             await self._error("forbidden", "You are not a participant of this call.")
             return
 
-        await database_sync_to_async(self.session.end)()
+        transitioned = await database_sync_to_async(self.session.end)()
+        if not transitioned:
+            # The DB copy was already terminal (the other side — or
+            # the REST end endpoint — ended it first) while this
+            # consumer's copy was stale. Do NOT broadcast a second
+            # call.ended; just tell this client it is over.
+            await self._error("already_ended", "This call has already ended.")
+            return
 
         await self.channel_layer.group_send(
             self.group_name,
@@ -488,6 +572,18 @@ class CallConsumer(AsyncJsonWebsocketConsumer):
             self.session.status = event["session"].get("status", self.session.status)
         await self.send_json(event)
 
+    async def peer_disconnected(self, event: dict) -> None:
+        """
+        The other party's socket dropped mid-call; the server ended
+        the session. Forwarded so the surviving peer can tear down
+        its RTCPeerConnection instead of waiting forever.
+        """
+        if event.get("user_id") == self.user_id:
+            return   # Our own drop — our socket is already closing.
+        if self.session:
+            self.session.status = event["session"].get("status", self.session.status)
+        await self.send_json(event)
+
     async def call_sdp_offer(self, event: dict) -> None:
         """Forward a relayed SDP offer to the local client (ignore if from self)."""
         if event.get("sender_id") == self.user_id:
@@ -592,7 +688,7 @@ class UserNotifyConsumer(AsyncJsonWebsocketConsumer):
 
         self.user = await database_sync_to_async(_get_user_from_token)(token)
         if self.user is None:
-            await self.close(code=4001)
+            await _reject_with_code(self, 4001)
             return
 
         self.user_id: str   = str(self.user.pk)
